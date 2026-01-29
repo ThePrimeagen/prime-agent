@@ -1,0 +1,14 @@
+{
+  "name": "prime-agent",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@cursor/sdk": "^1.0.23",
+    "dotenv": "^17.4.2"
+  }
+}

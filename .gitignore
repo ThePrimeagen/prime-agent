@@ -1,0 +1,9 @@
+/target
+prod.sql
+node_modules/
+playwright-report/
+test-results/
+.tmp/
+.env
+.prime-agent
+.devtmp
