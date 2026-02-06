@@ -1,16 +1,20 @@
 [package]
 name = "prime-agent"
-version = "0.1.15"
+version = "0.1.35"
 edition = "2024"
+description = "Skill-driven AGENTS.md builder and synchronizer"
+license = "MIT"
+repository = "https://example.com/prime-agent"
+readme = "README.md"
+keywords = ["agents", "cli", "markdown", "skills"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-indicatif = "0.17"
-owo-colors = "4.0"
-regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+similar = "2.6"
 
 [dev-dependencies]
 assert_cmd = "2.0"

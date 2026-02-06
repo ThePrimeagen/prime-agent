@@ -5,6 +5,7 @@
 - Always run `cargo clippy --all-targets --all-features -- -D warnings`, fix any issues.
 - Always run `cargo build`, fix any issues.
 - Always run `cargo test`, fix any issues.
+- For each step, check `AGENTS.md` and `README.md` in the target repo for any specified test, lint, or formatting requirements and follow them.
 
 ## Versioning
 

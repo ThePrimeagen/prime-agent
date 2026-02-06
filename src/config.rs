@@ -1,198 +1,137 @@
-use anyhow::{Context, Result};
-use serde::Deserialize;
-use std::collections::HashMap;
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Runner configuration loaded from JSON.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct Config {
-    #[serde(rename = "cli-program")]
-    pub cli_program: String,
-    #[serde(rename = "tool-type")]
-    pub tool_type: Option<ToolType>,
-    #[serde(rename = "tool-paths", default)]
-    pub tool_paths: HashMap<ToolType, String>,
-    #[serde(rename = "cli-args", default)]
-    pub cli_args: Vec<String>,
-    #[serde(default)]
-    pub lifecycles: HashMap<String, LifecycleConfig>,
-    #[serde(default)]
-    pub gates: Vec<GateCommand>,
-}
-
-/// Configuration for a specific lifecycle.
-#[derive(Debug, Deserialize, Default)]
-pub struct LifecycleConfig {
-    pub model: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
-#[serde(rename_all = "kebab-case")]
-pub enum ToolType {
-    Cursor,
-    Opencode,
-}
-
-/// Command definition for a gating step.
-#[derive(Debug, Deserialize, Clone)]
-pub struct GateCommand {
-    pub name: Option<String>,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
+    #[serde(rename = "skills-dir")]
+    skills_dir: Option<PathBuf>,
+    #[serde(flatten)]
+    values: HashMap<String, String>,
 }
 
 impl Config {
-    /// Load configuration from a JSON file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be read or parsed as JSON.
-    pub fn load(path: &Path) -> Result<Self> {
+    pub fn load_required(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            bail!("config file missing at '{}'", path.display());
+        }
+        Self::load_from_path(path)
+    }
+
+    pub fn load_from_path(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
-            .with_context(|| format!("failed to read config file: {}", path.display()))?;
+            .with_context(|| format!("failed to read config '{}'", path.display()))?;
         let parsed: Self = serde_json::from_str(&contents)
-            .with_context(|| format!("failed to parse config JSON: {}", path.display()))?;
+            .with_context(|| format!("failed to parse config '{}'", path.display()))?;
         Ok(parsed)
     }
 
-    /// Load configuration from a JSON file or return defaults.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file is provided but cannot be read or parsed.
-    pub fn load_optional(path: Option<&Path>) -> Result<Self> {
-        match path {
-            Some(path) => Self::load(path),
-            None => Ok(Self::default()),
+    pub fn load_or_default(path: &Path) -> Result<Self> {
+        if path.exists() {
+            Self::load_from_path(path)
+        } else {
+            Ok(Self::default())
         }
     }
 
-    /// Resolve the model name for a lifecycle with defaults.
-    pub fn model_for(&self, lifecycle: u8) -> String {
-        let key = lifecycle.to_string();
-        let from_config = self
-            .lifecycles
-            .get(&key)
-            .and_then(|config| config.model.clone());
-        if let Some(model) = from_config {
-            return normalize_model(&model);
+    pub fn save_to_path(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create '{}'", parent.display()))?;
         }
-        match lifecycle {
-            2 | 4 | 5 => "opus-4.5".to_string(),
-            3 => "gpt-5.2-codex".to_string(),
-            _ => "gpt-5.2-codex-high".to_string(),
+        let serialized = serde_json::to_string_pretty(self)
+            .context("failed to serialize config")?;
+        fs::write(path, format!("{serialized}\n"))
+            .with_context(|| format!("failed to write config '{}'", path.display()))?;
+        Ok(())
+    }
+
+    pub fn skills_dir(&self) -> Option<PathBuf> {
+        self.skills_dir
+            .clone()
+            .map(|path| expand_path(&path))
+    }
+
+    pub fn set_value(&mut self, name: &str, value: &str) {
+        if name == "skills-dir" {
+            self.skills_dir = Some(expand_path(&PathBuf::from(value)));
+        } else {
+            self.values.insert(name.to_string(), value.to_string());
         }
     }
 
-    /// Resolve program candidates with fallbacks for the tool type.
-    #[must_use]
-    pub fn resolve_programs(&self) -> Vec<String> {
-        let tool_type = self.tool_type.unwrap_or(ToolType::Cursor);
-        let mut programs = Vec::new();
-
-        if let Some(path) = self.tool_paths.get(&tool_type) {
-            push_unique(&mut programs, path);
+    pub fn get_value(&self, name: &str) -> Option<String> {
+        if name == "skills-dir" {
+            return self.skills_dir.as_ref().map(|path| path.display().to_string());
         }
-        push_unique(&mut programs, &self.cli_program);
+        self.values.get(name).cloned()
+    }
 
-        match tool_type {
-            ToolType::Cursor => {
-                push_unique(&mut programs, "cursor-agent");
-                push_unique(&mut programs, "agent");
-                push_unique(&mut programs, "cursor");
-            }
-            ToolType::Opencode => {
-                push_unique(&mut programs, "opencode");
-            }
+    pub fn all_values(&self) -> BTreeMap<String, String> {
+        let mut values = BTreeMap::new();
+        if let Some(path) = &self.skills_dir {
+            values.insert("skills-dir".to_string(), path.display().to_string());
         }
-
-        programs
+        for (key, value) in &self.values {
+            values.insert(key.clone(), value.clone());
+        }
+        values
     }
-}
 
-fn push_unique(programs: &mut Vec<String>, value: &str) {
-    if !programs.iter().any(|existing| existing == value) {
-        programs.push(value.to_string());
-    }
-}
-
-fn normalize_model(model: &str) -> String {
-    match model.trim().to_lowercase().as_str() {
-        "gpt codex 5.2 max mode" | "codex 5.2 max mode" => "gpt-5.2-codex-high",
-        "gpt codex 5.2" | "codex 5.2" => "gpt-5.2-codex",
-        "opus 4.5 max mode" => "opus-4.5",
-        "opus 4.5 thinking" => "opus-4.5-thinking",
-        "gpt 5.2" => "gpt-5.2",
-        _ => model,
-    }
-    .to_string()
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            cli_program: "cursor-agent".to_string(),
-            tool_type: Some(ToolType::Cursor),
-            tool_paths: HashMap::new(),
-            cli_args: Vec::new(),
-            lifecycles: HashMap::new(),
-            gates: Vec::new(),
+    pub fn apply_overrides(&mut self, overrides: &HashMap<String, String>) {
+        for (key, value) in overrides {
+            self.set_value(key, value);
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn model_for_uses_override() {
-        let json = r#"{
-            "cli-program": "cursor",
-            "lifecycles": { "1": { "model": "custom-model" } }
-        }"#;
-        let config: Config = serde_json::from_str(json).expect("valid config");
-        assert_eq!(config.model_for(1), "custom-model");
-        assert_eq!(config.model_for(2), "opus-4.5");
+pub fn ensure_config_file(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
     }
-
-    #[test]
-    fn normalizes_legacy_model_names() {
-        let json = r#"{
-            "cli-program": "cursor",
-            "lifecycles": { "1": { "model": "gpt codex 5.2 max mode" } }
-        }"#;
-        let config: Config = serde_json::from_str(json).expect("valid config");
-        assert_eq!(config.model_for(1), "gpt-5.2-codex-high");
-    }
-
-    #[test]
-    fn resolves_tool_type_program() {
-        let json = r#"{
-            "cli-program": "default-cli",
-            "tool-type": "cursor",
-            "tool-paths": {
-                "cursor": "/tmp/cursor-cli",
-                "opencode": "/tmp/opencode"
-            }
-        }"#;
-        let config: Config = serde_json::from_str(json).expect("valid config");
-        assert_eq!(
-            config.resolve_programs().first().map(String::as_str),
-            Some("/tmp/cursor-cli")
-        );
-    }
-
-    #[test]
-    fn default_config_uses_cursor_agent() {
-        let config = Config::default();
-        assert!(
-            config
-                .resolve_programs()
-                .iter()
-                .any(|program| program == "cursor-agent")
-        );
-    }
+    Config::default().save_to_path(path)
 }
+
+pub fn config_path() -> Result<PathBuf> {
+    if cfg!(target_os = "windows") {
+        bail!("Microslop skill issues");
+    }
+    if let Ok(base) = env::var("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(base).join("prime-agent").join("config"));
+    }
+    if let Ok(home) = env::var("HOME") {
+        if cfg!(target_os = "macos") {
+            return Ok(PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("prime-agent")
+                .join("config"));
+        }
+        return Ok(PathBuf::from(home)
+            .join(".config")
+            .join("prime-agent")
+            .join("config"));
+    }
+    bail!("HOME not set and XDG_CONFIG_HOME not set");
+}
+
+fn expand_path(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if (raw.starts_with("~/") || raw == "~")
+        && let Ok(home) = env::var("HOME")
+    {
+        let suffix = raw.strip_prefix("~").unwrap_or("");
+        return PathBuf::from(home).join(suffix.trim_start_matches('/'));
+    }
+    if raw.contains("$HOME")
+        && let Ok(home) = env::var("HOME")
+    {
+        let replaced = raw.replace("$HOME", &home);
+        return PathBuf::from(replaced);
+    }
+    path.to_path_buf()
+}
+
