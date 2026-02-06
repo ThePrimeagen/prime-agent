@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "prime-agent"
-version = "0.1.35"
+version = "0.1.39"
 dependencies = [
  "anyhow",
  "assert_cmd",

@@ -55,6 +55,9 @@ fn main() -> Result<()> {
         Command::Sync => {
             sync::run_sync(&skills_store, &agents_path)?;
         }
+        Command::SyncRemote => {
+            sync::run_sync_remote(&skills_store, &agents_path)?;
+        }
         Command::List => {
             for name in skills_store.list_skill_names()? {
                 println!("{name}");
@@ -94,7 +97,8 @@ fn handle_config_command(action: Option<&ConfigAction>) -> Result<()> {
     match action {
         Some(ConfigAction::Set { name, value }) => {
             let mut config = Config::load_or_default(&path)?;
-            config.set_value(name, value);
+            let resolved = resolve_config_value(name, value)?;
+            config.set_value(name, &resolved);
             config.save_to_path(&path)?;
             print_config_with_updated(&config, name);
         }
@@ -148,16 +152,28 @@ fn parse_config_overrides(values: &[String]) -> Result<std::collections::HashMap
         if key.trim().is_empty() {
             return Err(anyhow!("invalid --config value '{value}', empty key"));
         }
-        let normalized = if key.trim() == "skills-dir" {
-            expand_path(Path::new(raw_value))
-                .to_string_lossy()
-                .to_string()
-        } else {
-            raw_value.to_string()
-        };
+        let normalized = resolve_config_value(key.trim(), raw_value)?;
         overrides.insert(key.trim().to_string(), normalized);
     }
     Ok(overrides)
+}
+
+fn resolve_config_value(key: &str, raw_value: &str) -> Result<String> {
+    if key == "skills-dir" {
+        let expanded = expand_path(Path::new(raw_value));
+        let resolved = if expanded.is_absolute() {
+            expanded
+        } else {
+            let cwd = std::env::current_dir()
+                .context("failed to resolve current directory for skills-dir")?;
+            cwd.join(expanded)
+        };
+        if let Ok(canonical) = resolved.canonicalize() {
+            return Ok(canonical.to_string_lossy().to_string());
+        }
+        return Ok(resolved.to_string_lossy().to_string());
+    }
+    Ok(raw_value.to_string())
 }
 
 fn print_config(config: &Config) {

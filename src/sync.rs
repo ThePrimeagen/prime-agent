@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
+use std::process::Command;
 
 pub fn run_sync(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
     let (mut agents_doc, original_agents) = read_agents_doc(agents_path)?;
@@ -53,6 +54,13 @@ pub fn run_sync(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
             .with_context(|| format!("failed to write '{}'", agents_path.display()))?;
     }
 
+    commit_skills_repo(skills_store.root())?;
+    Ok(())
+}
+
+pub fn run_sync_remote(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
+    run_sync(skills_store, agents_path)?;
+    git_pull_rebase(skills_store.root())?;
     Ok(())
 }
 
@@ -147,4 +155,77 @@ fn prompt_choice() -> Result<Choice> {
 
 fn normalize_content(content: &str) -> String {
     content.replace("\r\n", "\n").trim_end_matches('\n').to_string()
+}
+
+fn git_pull_rebase(root: &Path) -> Result<()> {
+    if !git_is_repo(root)? {
+        return Ok(());
+    }
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("pull")
+        .arg("--rebase")
+        .status()
+        .context("failed to run git pull --rebase")?;
+    if !status.success() {
+        bail!("git pull --rebase failed");
+    }
+    Ok(())
+}
+
+fn commit_skills_repo(root: &Path) -> Result<()> {
+    if !git_is_repo(root)? {
+        return Ok(());
+    }
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("add")
+        .arg("-A")
+        .status()
+        .context("failed to run git add")?;
+    if !status.success() {
+        bail!("git add failed");
+    }
+    if git_is_clean(root)? {
+        return Ok(());
+    }
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("commit")
+        .arg("-m")
+        .arg("Update skills")
+        .status()
+        .context("failed to run git commit")?;
+    if !status.success() {
+        bail!("git commit failed");
+    }
+    Ok(())
+}
+
+fn git_is_repo(root: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .output()
+        .context("failed to run git rev-parse")?;
+    Ok(output.status.success())
+}
+
+fn git_is_clean(root: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("status")
+        .arg("--porcelain")
+        .output()
+        .context("failed to run git status")?;
+    if !output.status.success() {
+        bail!("git status failed");
+    }
+    Ok(output.stdout.is_empty())
 }

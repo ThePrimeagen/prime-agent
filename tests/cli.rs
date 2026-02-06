@@ -3,6 +3,7 @@ use assert_cmd::Command;
 use predicates::str::contains;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use tempfile::TempDir;
 
 fn cmd_with_skills_dir(temp: &TempDir, skills_dir: &Path) -> Command {
@@ -28,6 +29,27 @@ fn write_config(temp: &TempDir, skills_dir: &Path) -> PathBuf {
     );
     fs::write(&config_path, config).expect("write config");
     config_path
+}
+
+fn run_git(dir: &Path, args: &[&str]) {
+    let status = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .status()
+        .expect("git command");
+    assert!(status.success());
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> String {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git output");
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).to_string()
 }
 
 #[test]
@@ -457,4 +479,96 @@ fn list_outputs_skill_names() {
         .success()
         .stdout(contains("alpha\n"))
         .stdout(contains("beta\n"));
+}
+
+#[test]
+fn config_set_skills_dir_relative_expands_to_cwd() {
+    let temp = TempDir::new().expect("temp dir");
+    let config_home = temp.path().join("config");
+
+    let mut cmd = cargo_bin_cmd!("prime-agent");
+    cmd.current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("config")
+        .arg("set")
+        .arg("skills-dir")
+        .arg(".");
+    cmd.assert().success();
+
+    let mut list_cmd = cargo_bin_cmd!("prime-agent");
+    list_cmd
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("config");
+    list_cmd
+        .assert()
+        .success()
+        .stdout(contains(format!("skills-dir={}\n", temp.path().display())));
+}
+
+#[test]
+fn sync_commits_skills_repo() {
+    let temp = TempDir::new().expect("temp dir");
+    let skills_dir = temp.path().join("skills");
+    write_config(&temp, &skills_dir);
+    fs::create_dir_all(skills_dir.join("alpha")).expect("alpha dir");
+    fs::write(skills_dir.join("alpha/SKILL.md"), "Initial\n").expect("skill");
+
+    run_git(&skills_dir, &["init"]);
+    run_git(&skills_dir, &["config", "user.email", "test@example.com"]);
+    run_git(&skills_dir, &["config", "user.name", "Test"]);
+    run_git(&skills_dir, &["add", "-A"]);
+    run_git(&skills_dir, &["commit", "-m", "Initial"]);
+
+    let agents = [
+        "<!-- prime-agent(Start alpha) -->",
+        "## alpha",
+        "Updated content",
+        "<!-- prime-agent(End alpha) -->",
+        "",
+    ]
+    .join("\n");
+    fs::write(default_agents_path(&temp), agents).expect("agents");
+
+    let mut cmd = cmd_with_skills_dir(&temp, &skills_dir);
+    cmd.arg("sync").write_stdin("a\n");
+    cmd.assert().success();
+
+    let count = git_output(&skills_dir, &["rev-list", "--count", "HEAD"]);
+    assert_eq!(count.trim(), "2");
+}
+
+#[test]
+fn sync_remote_commits_and_pulls() {
+    let temp = TempDir::new().expect("temp dir");
+    let skills_dir = temp.path().join("skills");
+    let remote_dir = temp.path().join("remote.git");
+    write_config(&temp, &skills_dir);
+
+    fs::create_dir_all(skills_dir.join("alpha")).expect("alpha dir");
+    fs::write(skills_dir.join("alpha/SKILL.md"), "Initial\n").expect("skill");
+
+    run_git(&skills_dir, &["init"]);
+    run_git(&skills_dir, &["config", "user.email", "test@example.com"]);
+    run_git(&skills_dir, &["config", "user.name", "Test"]);
+    run_git(&skills_dir, &["add", "-A"]);
+    run_git(&skills_dir, &["commit", "-m", "Initial"]);
+
+    run_git(temp.path(), &["init", "--bare", remote_dir.to_str().expect("remote")]);
+    run_git(&skills_dir, &["remote", "add", "origin", remote_dir.to_str().expect("remote")]);
+    run_git(&skills_dir, &["push", "-u", "origin", "HEAD"]);
+
+    let agents = [
+        "<!-- prime-agent(Start alpha) -->",
+        "## alpha",
+        "Updated content",
+        "<!-- prime-agent(End alpha) -->",
+        "",
+    ]
+    .join("\n");
+    fs::write(default_agents_path(&temp), agents).expect("agents");
+
+    let mut cmd = cmd_with_skills_dir(&temp, &skills_dir);
+    cmd.arg("sync-remote").write_stdin("a\n");
+    cmd.assert().success();
 }

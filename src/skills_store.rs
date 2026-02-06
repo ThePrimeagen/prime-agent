@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct SkillsStore {
     root: PathBuf,
@@ -11,6 +11,11 @@ impl SkillsStore {
     #[allow(clippy::missing_const_for_fn)]
     pub fn new(root: PathBuf) -> Self {
         Self { root }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn validate_name(name: &str) -> Result<()> {

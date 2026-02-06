@@ -36,6 +36,8 @@ pub enum Command {
     },
     /// Sync skills with AGENTS.md
     Sync,
+    /// Sync skills and pull remote changes
+    SyncRemote,
     /// List available skills
     List,
     /// Get or set configuration values
