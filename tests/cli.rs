@@ -526,10 +526,11 @@ fn config_set_skills_dir_relative_expands_to_cwd() {
         .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", &config_home)
         .arg("config");
+    let expected = temp.path().canonicalize().expect("canonicalize temp path");
     list_cmd
         .assert()
         .success()
-        .stdout(contains(format!("skills-dir={}\n", temp.path().display())));
+        .stdout(contains(format!("skills-dir={}\n", expected.display())));
 }
 
 #[test]
