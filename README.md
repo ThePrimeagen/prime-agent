@@ -26,3 +26,9 @@ instructions stored as Markdown files.
 
 - Default: `./skills`
 - Override with `--skills-dir`, `PRIME_AGENT_SKILLS_DIR`, or `--config skills-dir:<path>`.
+
+## Naming Rules
+
+- New or updated skill and pipeline names must match `[a-z0-9-]+`.
+- Use lowercase letters, digits, and dashes only (no spaces or underscores).
+- Existing legacy skill names can still be referenced (`get`, `delete`), but any write/update must use the new format.

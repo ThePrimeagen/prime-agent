@@ -31,6 +31,19 @@ impl SkillsStore {
         Ok(())
     }
 
+    pub fn validate_write_name(name: &str) -> Result<()> {
+        if name.is_empty() {
+            bail!("skill name cannot be empty");
+        }
+        if !name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        {
+            bail!("skill name must contain only lowercase letters, digits, and dashes");
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn skill_path(&self, name: &str) -> PathBuf {
         self.root.join(name).join("SKILL.md")
@@ -44,6 +57,7 @@ impl SkillsStore {
     }
 
     pub fn save_skill(&self, name: &str, content: &str) -> Result<()> {
+        Self::validate_write_name(name)?;
         fs::create_dir_all(&self.root)
             .with_context(|| format!("failed to create skills dir '{}'", self.root.display()))?;
         let path = self.skill_path(name);

@@ -1,0 +1,152 @@
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=146.526138ms ]
+Starting local server at http://127.0.0.1:8080
+Watching for changes in *.go, *.js, *.css, *.html
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:15:00 listening on http://127.0.0.1:8080
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Detected change: ./hot_reload_test.js
+Reloading after change...
+Generating templ views...
+(✓) Complete [ updates=0 duration=112.103923ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:16:06 listening on http://127.0.0.1:8080
+2026/03/17 07:16:06 server failed: listen tcp 127.0.0.1:8080: bind: address already in use
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Couldn't watch .: No such file or directory
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Detected change: ./main.go
+Reloading after change...
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=129.909798ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:22:44 listening on http://127.0.0.1:8080
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Detected change: ./main.go
+Reloading after change...
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=124.495025ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:23:32 listening on http://127.0.0.1:8080
+2026/03/17 07:23:32 server failed: listen tcp 127.0.0.1:8080: bind: address already in use
+Watches established.
+Detected change: ./hot_reload_test.js
+Reloading after change...
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=143.682204ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:23:45 listening on http://127.0.0.1:8080
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Detected change: ./internal/web/handlers.go
+Reloading after change...
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=177.716484ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:25:10 listening on http://127.0.0.1:8080
+2026/03/17 07:25:10 server failed: listen tcp 127.0.0.1:8080: bind: address already in use
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Detected change: ./internal/web/handlers.go
+Reloading after change...
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=206.161165ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:25:18 listening on http://127.0.0.1:8080
+2026/03/17 07:25:18 server failed: listen tcp 127.0.0.1:8080: bind: address already in use
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Detected change: ./hot_reload_test.js
+Reloading after change...
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=137.666146ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:26:27 listening on http://127.0.0.1:8080
+2026/03/17 07:26:27 server failed: listen tcp 127.0.0.1:8080: bind: address already in use
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Detected change: ./main.go
+Reloading after change...
+Generating templ views...
+(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
+(✓) Complete [ updates=5 duration=145.532441ms ]
+Starting local server at http://127.0.0.1:8080
+Setting up watches.  Beware: since -r was given, this may take a while!
+2026/03/17 07:26:57 listening on http://127.0.0.1:8080
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+Setting up watches.  Beware: since -r was given, this may take a while!
+Couldn't watch .: No such file or directory
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.

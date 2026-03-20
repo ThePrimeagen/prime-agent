@@ -580,8 +580,7 @@ fn list_with_fragment_outputs_single_line() {
     cmd.arg("list").arg("zephyr");
     cmd.assert()
         .success()
-        .stdout(contains("zephyr-a zephyr-b\n"))
-        .stdout(contains_text("prime-agent(").not());
+        .stdout(contains("zephyr-a zephyr-b\n"));
 }
 
 #[test]

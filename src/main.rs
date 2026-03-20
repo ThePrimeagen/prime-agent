@@ -19,10 +19,8 @@ use crate::skills_store::SkillsStore;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if should_print_banner(&cli) {
-        let version = env!("CARGO_PKG_VERSION");
-        println!("\u{001b}[32mprime-agent({version})\u{001b}[0m");
-    }
+    let version = env!("CARGO_PKG_VERSION");
+    println!("\u{001b}[32mprime-agent({version})\u{001b}[0m");
 
     let overrides = parse_config_overrides(&cli.config_overrides)?;
 
@@ -50,7 +48,7 @@ fn main() -> Result<()> {
             std::fs::write(&agents_path, rendered)?;
         }
         Command::Set { name, path } => {
-            SkillsStore::validate_name(&name)?;
+            SkillsStore::validate_write_name(&name)?;
             let content = std::fs::read_to_string(&path)?;
             skills_store.save_skill(&name, &content)?;
         }
@@ -110,16 +108,6 @@ fn run_list_cmd(skills_store: &SkillsStore, fragment: Option<String>) -> Result<
         }
     }
     Ok(())
-}
-
-#[allow(clippy::missing_const_for_fn)]
-fn should_print_banner(cli: &Cli) -> bool {
-    !matches!(
-        &cli.command,
-        Command::List {
-            fragment: Some(_),
-        }
-    )
 }
 
 fn run_local_cmd(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {

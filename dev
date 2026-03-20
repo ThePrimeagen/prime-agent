@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly WATCH_ROOT="."
+readonly WATCH_EXCLUDE='(^|/)(\.git|node_modules|tmp|\.tmp|dist|build|\.cursor|\.idea|\.devtmp|test-results|playwright-report|coverage)(/|$)'
+readonly WATCH_EVENTS="close_write,delete,move"
+readonly WATCH_PATTERN='.*\.(go|js|css|html)$'
+readonly IGNORE_PATTERN='.*_templ\.go$'
+readonly DEV_BIN_DIR=".devtmp"
+readonly DEV_BIN_PATH="${DEV_BIN_DIR}/prime-agent-dev"
+
+SERVER_PID=""
+
+require_tools() {
+  if ! command -v inotifywait >/dev/null 2>&1; then
+    echo "error: inotifywait is required (install inotify-tools)"
+    exit 1
+  fi
+}
+
+generate_views() {
+  echo "Generating templ views..."
+  go run github.com/a-h/templ/cmd/templ@latest generate
+}
+
+build_server() {
+  mkdir -p "${DEV_BIN_DIR}"
+  go build -o "${DEV_BIN_PATH}" .
+}
+
+start_server() {
+  echo "Starting local server at http://127.0.0.1:8080"
+  "${DEV_BIN_PATH}" &
+  SERVER_PID=$!
+}
+
+stop_server() {
+  if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
+    kill "${SERVER_PID}" 2>/dev/null || true
+    wait "${SERVER_PID}" 2>/dev/null || true
+  fi
+  for _ in {1..30}; do
+    if ! ss -ltn 2>/dev/null | rg -q '127\.0\.0\.1:8080'; then
+      break
+    fi
+    sleep 0.1
+  done
+  SERVER_PID=""
+}
+
+cleanup() {
+  stop_server
+}
+
+handle_signal() {
+  cleanup
+  exit 0
+}
+
+restart_server() {
+  echo "Reloading after change..."
+  stop_server
+
+  if ! generate_views; then
+    echo "templ generation failed; waiting for next change before retrying."
+    return 1
+  fi
+
+  if ! build_server; then
+    echo "build failed; waiting for next change before retrying."
+    return 1
+  fi
+
+  start_server
+}
+
+require_tools
+trap cleanup EXIT
+trap handle_signal INT TERM
+
+generate_views
+build_server
+start_server
+
+echo "Watching for changes in *.go, *.js, *.css, *.html"
+while IFS= read -r changed_path; do
+  if [[ "${changed_path}" =~ ${WATCH_PATTERN} ]] && [[ ! "${changed_path}" =~ ${IGNORE_PATTERN} ]]; then
+    echo "Detected change: ${changed_path}"
+    restart_server || true
+  fi
+done < <(inotifywait \
+  --monitor \
+  --recursive \
+  --quiet \
+  --event "${WATCH_EVENTS}" \
+  --exclude "${WATCH_EXCLUDE}" \
+  --format '%w%f' \
+  "${WATCH_ROOT}")

@@ -1,6 +1,6 @@
 [package]
 name = "prime-agent"
-version = "0.1.50"
+version = "0.1.56"
 edition = "2024"
 description = "Skill-driven AGENTS.md builder and synchronizer"
 license = "MIT"
