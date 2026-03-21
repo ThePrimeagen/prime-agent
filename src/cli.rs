@@ -14,6 +14,9 @@ pub struct Cli {
     /// Override configuration value (key:value). Can be repeated.
     #[arg(long = "config", value_name = "key:value")]
     pub config_overrides: Vec<String>,
+    /// Prime-agent data directory (skills/, pipelines/, …). Default: XDG_CONFIG_HOME/prime-agent.
+    #[arg(long, global = true)]
+    pub data_dir: Option<PathBuf>,
     /// Directory containing skill markdown files (default: ./skills)
     #[arg(long)]
     pub skills_dir: Option<PathBuf>,
@@ -49,6 +52,12 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
+    },
+    /// Run the web UI; static files are served from the current working directory
+    Serve {
+        /// Listen address (default: 127.0.0.1:8080)
+        #[arg(long, env = "PRIME_AGENT_ADDR")]
+        bind: Option<String>,
     },
     /// Remove a skill section from AGENTS.md
     Delete {

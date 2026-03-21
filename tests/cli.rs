@@ -338,7 +338,7 @@ fn config_sets_skills_dir_when_no_flag() {
 }
 
 #[test]
-fn missing_skills_dir_errors_without_flag_or_config() {
+fn set_writes_skill_under_default_data_dir_without_config_file() {
     let temp = TempDir::new().expect("temp dir");
     let source = temp.path().join("source.md");
     fs::write(&source, "Config content\n").expect("source");
@@ -349,7 +349,27 @@ fn missing_skills_dir_errors_without_flag_or_config() {
         .arg("set")
         .arg("alpha")
         .arg(&source);
-    cmd.assert().failure();
+    cmd.assert().success();
+
+    let expected = temp
+        .path()
+        .join("missing-config/prime-agent/skills/alpha/SKILL.md");
+    let skill = fs::read_to_string(expected).expect("skill");
+    assert!(skill.contains("Config content"));
+}
+
+#[test]
+fn serve_help_mentions_bind() {
+    let mut cmd = cargo_bin_cmd!("prime-agent");
+    cmd.arg("serve").arg("--help");
+    cmd.assert().success().stdout(contains("--bind"));
+}
+
+#[test]
+fn global_help_lists_data_dir() {
+    let mut cmd = cargo_bin_cmd!("prime-agent");
+    cmd.arg("--help");
+    cmd.assert().success().stdout(contains("--data-dir"));
 }
 
 #[test]

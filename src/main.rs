@@ -9,8 +9,13 @@ use std::path::{Path, PathBuf};
 mod agents_md;
 mod cli;
 mod config;
+mod counter;
+mod data_dir;
+mod pipeline_store;
+mod serve;
 mod skills_store;
 mod sync;
+mod web;
 
 use crate::agents_md::AgentSection;
 use crate::cli::{Cli, Command, ConfigAction};
@@ -26,6 +31,15 @@ fn main() -> Result<()> {
 
     if let Command::Config { action } = &cli.command {
         handle_config_command(action.as_ref())?;
+        return Ok(());
+    }
+
+    if let Command::Serve { bind } = &cli.command {
+        let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+        let bind = bind
+            .clone()
+            .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        serve::run_blocking(data_dir, bind)?;
         return Ok(());
     }
 
@@ -58,6 +72,9 @@ fn main() -> Result<()> {
         Command::Local => run_local_cmd(&skills_store, &agents_path)?,
         Command::Config { .. } => {
             unreachable!("config command handled before skills setup");
+        }
+        Command::Serve { .. } => {
+            unreachable!("serve command handled before skills setup");
         }
         Command::Delete { name } => {
             SkillsStore::validate_name(&name)?;
@@ -192,9 +209,11 @@ fn resolve_skills_dir(
         Config::default()
     };
     config.apply_overrides(overrides);
-    config
-        .skills_dir()
-        .context("skills directory not configured; use --skills-dir or config file")
+    if let Some(dir) = config.skills_dir() {
+        return Ok(dir);
+    }
+    let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+    Ok(data_dir.join("skills"))
 }
 
 fn parse_config_overrides(values: &[String]) -> Result<std::collections::HashMap<String, String>> {

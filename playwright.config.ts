@@ -1,8 +1,9 @@
 import { defineConfig } from "@playwright/test";
+import * as path from "path";
 
 const address = "127.0.0.1:18080";
 const baseURL = `http://${address}`;
-const dbPath = ".tmp/e2e.sqlite";
+const dataDir = path.join(process.cwd(), ".tmp/e2e_data");
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -17,9 +18,10 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: `bash -lc "mkdir -p .tmp && rm -f ${dbPath} && PRIME_AGENT_ADDR=${address} PRIME_AGENT_DB_PATH=${dbPath} go run ."`,
+    command: `bash -lc "mkdir -p '${dataDir}' && cargo run -- serve --data-dir '${dataDir}' --bind '${address}'"`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    cwd: process.cwd(),
   },
 });

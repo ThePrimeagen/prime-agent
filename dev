@@ -4,10 +4,11 @@ set -euo pipefail
 readonly WATCH_ROOT="."
 readonly WATCH_EXCLUDE='(^|/)(\.git|node_modules|tmp|\.tmp|dist|build|\.cursor|\.idea|\.devtmp|test-results|playwright-report|coverage)(/|$)'
 readonly WATCH_EVENTS="close_write,delete,move"
-readonly WATCH_PATTERN='.*\.(go|js|css|html)$'
-readonly IGNORE_PATTERN='.*_templ\.go$'
+readonly WATCH_PATTERN='.*\.(rs|toml|js|css|html)$'
 readonly DEV_BIN_DIR=".devtmp"
 readonly DEV_BIN_PATH="${DEV_BIN_DIR}/prime-agent-dev"
+readonly DATA_DIR="${PRIME_AGENT_DEV_DATA:-.tmp/dev_data}"
+readonly BIND="${PRIME_AGENT_ADDR:-127.0.0.1:8080}"
 
 SERVER_PID=""
 
@@ -18,19 +19,16 @@ require_tools() {
   fi
 }
 
-generate_views() {
-  echo "Generating templ views..."
-  go run github.com/a-h/templ/cmd/templ@latest generate
-}
-
 build_server() {
   mkdir -p "${DEV_BIN_DIR}"
-  go build -o "${DEV_BIN_PATH}" .
+  cargo build -q
+  cp -f target/debug/prime-agent "${DEV_BIN_PATH}"
 }
 
 start_server() {
-  echo "Starting local server at http://127.0.0.1:8080"
-  "${DEV_BIN_PATH}" &
+  echo "Starting local server (data-dir=${DATA_DIR}) at http://${BIND}"
+  mkdir -p "${DATA_DIR}"
+  "${DEV_BIN_PATH}" serve --data-dir "${DATA_DIR}" --bind "${BIND}" &
   SERVER_PID=$!
 }
 
@@ -40,7 +38,7 @@ stop_server() {
     wait "${SERVER_PID}" 2>/dev/null || true
   fi
   for _ in {1..30}; do
-    if ! ss -ltn 2>/dev/null | rg -q '127\.0\.0\.1:8080'; then
+    if ! ss -ltn 2>/dev/null | rg -qF "${BIND}"; then
       break
     fi
     sleep 0.1
@@ -61,11 +59,6 @@ restart_server() {
   echo "Reloading after change..."
   stop_server
 
-  if ! generate_views; then
-    echo "templ generation failed; waiting for next change before retrying."
-    return 1
-  fi
-
   if ! build_server; then
     echo "build failed; waiting for next change before retrying."
     return 1
@@ -78,13 +71,12 @@ require_tools
 trap cleanup EXIT
 trap handle_signal INT TERM
 
-generate_views
 build_server
 start_server
 
-echo "Watching for changes in *.go, *.js, *.css, *.html"
+echo "Watching for changes in *.rs, *.toml, *.js, *.css, *.html"
 while IFS= read -r changed_path; do
-  if [[ "${changed_path}" =~ ${WATCH_PATTERN} ]] && [[ ! "${changed_path}" =~ ${IGNORE_PATTERN} ]]; then
+  if [[ "${changed_path}" =~ ${WATCH_PATTERN} ]]; then
     echo "Detected change: ${changed_path}"
     restart_server || true
   fi

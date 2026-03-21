@@ -1,7 +1,0 @@
-Generating templ views...
-(✓) Post-generation event received, processing... [ needsRestart=true needsBrowserReload=true ]
-(✓) Complete [ updates=5 duration=124.477549ms ]
-Starting local server at http://127.0.0.1:8080
-Watching for changes in *.go, *.js, *.css, *.html
-2026/03/17 07:29:28 listening on http://127.0.0.1:8080
-2026/03/17 07:29:28 server failed: listen tcp 127.0.0.1:8080: bind: address already in use

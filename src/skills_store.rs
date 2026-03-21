@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct SkillsStore {
     root: PathBuf,
 }
@@ -32,14 +33,12 @@ impl SkillsStore {
     }
 
     pub fn validate_write_name(name: &str) -> Result<()> {
-        if name.is_empty() {
-            bail!("skill name cannot be empty");
-        }
         if !name
             .chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+            || name.is_empty()
         {
-            bail!("skill name must contain only lowercase letters, digits, and dashes");
+            bail!("name must contain only lowercase letters, digits, and dashes");
         }
         Ok(())
     }
@@ -70,7 +69,33 @@ impl SkillsStore {
         Ok(())
     }
 
+    pub fn rename_skill_directory(&self, old: &str, new: &str) -> Result<()> {
+        Self::validate_write_name(new)?;
+        let old_d = self.root.join(old);
+        let new_d = self.root.join(new);
+        if !old_d.is_dir() {
+            bail!("skill directory not found");
+        }
+        if new_d.exists() {
+            bail!("skill already exists");
+        }
+        fs::rename(&old_d, &new_d).with_context(|| {
+            format!(
+                "rename skill dir '{}' -> '{}'",
+                old_d.display(),
+                new_d.display()
+            )
+        })?;
+        Ok(())
+    }
+
     pub fn delete_skill(&self, name: &str) -> Result<()> {
+        let dir = self.root.join(name);
+        if dir.is_dir() {
+            fs::remove_dir_all(&dir)
+                .with_context(|| format!("failed to remove skill dir '{}'", dir.display()))?;
+            return Ok(());
+        }
         let path = self.skill_path(name);
         if path.exists() {
             fs::remove_file(&path)

@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hello World</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  </head>
+  <body style="margin:0;font-family:system-ui, sans-serif;">
+    <div id="app-shell" style="display:flex;min-height:100vh;">
+      <nav id="left-nav" style="width:20%;min-width:220px;border-right:1px solid #ddd;padding:1rem;box-sizing:border-box;">
+        <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+          <a
+            id="tab-skills"
+            data-testid="tab-skills"
+            data-icon="sword"
+            title="Skills"
+            aria-label="Skills"
+            href="/skills"
+            aria-current="{{if eq .ActiveSection "skills"}}page{{else}}false{{end}}"
+            style="display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;text-decoration:none;color:inherit;">&#9876;</a>
+          <a
+            id="tab-pipeline"
+            data-testid="tab-pipeline"
+            data-icon="pipe"
+            title="Pipeline"
+            aria-label="Pipeline"
+            href="/pipelines"
+            aria-current="{{if eq .ActiveSection "pipelines"}}page{{else}}false{{end}}"
+            style="display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;text-decoration:none;color:inherit;">&#x2554;&#x2557;</a>
+        </div>
+
+        <section id="skills-nav-panel" data-tab-panel="skills" {{if ne .ActiveSection "skills"}}hidden{{end}}>
+          <h2 style="margin-top:0;">Skills</h2>
+          <button
+            type="button"
+            data-testid="skill-create-open"
+            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"
+            onclick="document.getElementById('skill-modal').showModal();">[ + ]</button>
+
+          <dialog id="skill-modal">
+            <form method="post" action="/skills">
+              <h3>Create Skill</h3>
+              <label>Name<br><input name="name" required></label><br><br>
+              <label>Prompt<br><textarea name="prompt" rows="6" cols="40" required></textarea></label><br><br>
+              <button type="submit">Save</button>
+              <button type="button" onclick="document.getElementById('skill-modal').close();">Cancel</button>
+            </form>
+          </dialog>
+
+          {{if .Skills}}
+          <ul id="skills-nav-list" style="padding-left:0;margin-top:1rem;">
+            {{range .Skills}}
+            <li style="list-style:none;margin-top:0.5rem;">
+              <a
+                data-testid="skill-nav-link"
+                data-selected="{{if and $.SelectedSkill (eq $.SelectedSkill.ID .ID)}}true{{else}}false{{end}}"
+                href="/skills/{{.ID}}"
+                style="display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;">{{.Name}}</a>
+            </li>
+            {{end}}
+          </ul>
+          {{else}}
+          <p>No skills yet.</p>
+          {{end}}
+        </section>
+
+        <section id="pipeline-nav-panel" data-tab-panel="pipeline" {{if ne .ActiveSection "pipelines"}}hidden{{end}}>
+          <h2 style="margin-top:0;">Pipeline</h2>
+          <button
+            type="button"
+            data-testid="pipeline-create-open"
+            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"
+            onclick="document.getElementById('pipeline-modal').showModal();">[ + ]</button>
+
+          <dialog id="pipeline-modal">
+            <form method="post" action="/pipelines">
+              <h3>Create Pipeline</h3>
+              <label>Name<br><input name="name" data-lowercase-field="pipeline-name" required></label><br><br>
+              <button type="submit">Save</button>
+              <button type="button" onclick="document.getElementById('pipeline-modal').close();">Cancel</button>
+            </form>
+          </dialog>
+
+          {{if .Pipelines}}
+          <ul id="pipeline-nav-list" style="padding-left:0;margin-top:1rem;">
+            {{range .Pipelines}}
+            <li style="list-style:none;margin-top:0.5rem;">
+              <a
+                data-testid="pipeline-nav-link"
+                data-selected="{{if and $.SelectedPipeline (eq $.SelectedPipeline.ID .ID)}}true{{else}}false{{end}}"
+                href="/pipelines/{{.ID}}"
+                style="display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;">{{.Name}}</a>
+            </li>
+            {{end}}
+          </ul>
+          {{else}}
+          <p>No pipelines yet.</p>
+          {{end}}
+
+          {{if .SelectedPipeline}}
+          <h3 style="margin-top:1.25rem;margin-bottom:0.25rem;">Steps</h3>
+          {{if .PipelineSteps}}
+          <ul id="pipeline-step-nav-list" style="padding-left:0;margin-top:0.5rem;">
+            {{range .PipelineSteps}}
+            <li
+              data-testid="pipeline-step-nav-item"
+              data-step-id="{{.ID}}"
+              data-reorder-endpoint="/pipelines/{{$.SelectedPipeline.ID}}/steps/{{.ID}}/reorder"
+              draggable="true"
+              style="list-style:none;margin-top:0.4rem;padding:0.45rem 0.55rem;border:1px solid #ddd;border-radius:6px;background:#fff;display:flex;justify-content:space-between;align-items:center;gap:0.5rem;cursor:grab;">
+              <span>{{.Title}}</span>
+              <span style="display:flex;flex-direction:column;align-items:flex-end;gap:0.1rem;">
+                <span data-testid="pipeline-step-skill-count" style="font-size:0.8rem;color:#4b5563;">{{.SkillCount}}</span>
+                <span data-testid="pipeline-step-skill-summary" style="font-size:0.72rem;color:#6b7280;">{{if .Skills}}{{joinStepSkillNames .Skills}}{{else}}No skills{{end}}</span>
+              </span>
+            </li>
+            {{end}}
+          </ul>
+          {{else}}
+          <p style="margin-top:0.5rem;">No steps yet.</p>
+          {{end}}
+          {{end}}
+        </section>
+      </nav>
+      <main id="main-content" style="width:80%;padding:1rem;box-sizing:border-box;">
+        <section id="skills-main-panel" data-tab-main="skills" {{if ne .ActiveSection "skills"}}hidden{{end}}>
+          <h1>Skills</h1>
+          {{if .SelectedSkill}}
+          <article data-skill-editor data-skill-id="{{.SelectedSkill.ID}}" style="max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;">
+            <form method="post" action="/skills/{{.SelectedSkill.ID}}/update" data-skill-form>
+              <label>Name<br><input name="name" value="{{.SelectedSkill.Name}}" required></label><br><br>
+              <label>Prompt<br><textarea name="prompt" rows="8" cols="70" required>{{.SelectedSkill.Prompt}}</textarea></label><br><br>
+              <div style="position:absolute;top:0.5rem;right:0.6rem;display:flex;align-items:center;gap:0.35rem;">
+                <span
+                  data-testid="autosave-status"
+                  data-save-state="saved"
+                  aria-live="polite"
+                  aria-label="Saved"
+                  title="Saved"
+                  style="font-size:0.85rem;line-height:1;color:#047857;">✓</span>
+                <div data-delete-controls style="position:relative;">
+                  <button
+                    type="button"
+                    data-testid="delete-skill-trigger"
+                    aria-label="Delete skill"
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    title="Delete skill"
+                    style="border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:0.85rem;line-height:1;padding:0;">&#128465;</button>
+                  <div
+                    data-testid="delete-skill-popover"
+                    data-delete-popover
+                    hidden
+                    style="position:absolute;top:1.1rem;right:0;background:#fff;border:1px solid #d1d5db;border-radius:6px;padding:0.25rem;box-shadow:0 2px 8px rgba(0,0,0,0.12);z-index:10;white-space:nowrap;">
+                    <button
+                      type="button"
+                      data-delete-confirm
+                      style="border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;">are you sure</button>
+                  </div>
+                </div>
+              </div>
+            </form>
+            <form method="post" action="/skills/{{.SelectedSkill.ID}}/delete" data-skill-delete-form></form>
+          </article>
+          {{else}}
+            {{if .Skills}}
+            <p>Select a skill from the left nav.</p>
+            {{else}}
+            <p>No skills yet.</p>
+            {{end}}
+          {{end}}
+        </section>
+
+        <section id="pipeline-main-panel" data-tab-main="pipeline" {{if ne .ActiveSection "pipelines"}}hidden{{end}}>
+          {{if .SelectedPipeline}}
+          <h1 id="pipeline-title">{{.SelectedPipeline.Name}}</h1>
+          <button
+            type="button"
+            data-testid="pipeline-step-create-open"
+            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"
+            onclick="document.getElementById('pipeline-step-modal').showModal();">Add Step</button>
+
+          <dialog id="pipeline-step-modal">
+            <form method="post" action="/pipelines/{{.SelectedPipeline.ID}}/steps">
+              <h3>Create Step</h3>
+              <label>Title<br><input name="title" data-lowercase-field="pipeline-step-title" required></label><br><br>
+              <label>Prompt<br><textarea name="prompt" rows="6" cols="40" required></textarea></label><br><br>
+              <button type="submit">Save</button>
+              <button type="button" onclick="document.getElementById('pipeline-step-modal').close();">Cancel</button>
+            </form>
+          </dialog>
+
+          {{if .PipelineSteps}}
+            {{range .PipelineSteps}}
+            <article data-testid="pipeline-step-editor" style="max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;">
+              <form method="post" action="/pipelines/{{$.SelectedPipeline.ID}}/steps/{{.ID}}/update">
+                <label>Title<br><input name="title" data-lowercase-field="pipeline-step-title" value="{{.Title}}" required></label><br><br>
+                <label>Description<br><textarea name="prompt" rows="6" cols="70" required>{{.Prompt}}</textarea></label><br><br>
+                <button type="submit" data-testid="pipeline-step-save">Save</button>
+              </form>
+              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                <form method="post" action="/pipelines/{{$.SelectedPipeline.ID}}/steps/{{.ID}}/skills" style="display:flex;gap:0.4rem;align-items:center;">
+                  <select name="skill_id" required>
+                    <option value="">Select skill</option>
+                    {{range $.Skills}}
+                    <option value="{{.ID}}">{{.Name}}</option>
+                    {{end}}
+                  </select>
+                  <button type="submit">Add Skill</button>
+                </form>
+                <form method="post" action="/pipelines/{{$.SelectedPipeline.ID}}/steps/{{.ID}}/delete">
+                  <button type="submit" data-testid="pipeline-step-delete" style="border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.2rem 0.45rem;font-size:0.8rem;cursor:pointer;">Delete</button>
+                </form>
+              </div>
+              {{$step := .}}
+              {{if .Skills}}
+              <ul style="padding-left:1.1rem;margin:0.6rem 0 0 0;">
+                {{range .Skills}}
+                <li style="margin-top:0.3rem;">
+                  <span data-testid="pipeline-step-attached-skill">{{.Name}}</span>
+                  <form method="post" action="/pipelines/{{$.SelectedPipeline.ID}}/steps/{{$step.ID}}/skills/{{.ID}}/delete" style="display:inline;">
+                    <button type="submit" style="margin-left:0.4rem;border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;">Remove</button>
+                  </form>
+                </li>
+                {{end}}
+              </ul>
+              {{else}}
+              <p style="margin-top:0.6rem;color:#6b7280;">No skills attached.</p>
+              {{end}}
+            </article>
+            {{end}}
+          {{else}}
+            <p>No steps yet.</p>
+          {{end}}
+          {{else}}
+          <h1>Pipeline</h1>
+          {{if .Pipelines}}
+          <p>Select a pipeline from the left nav.</p>
+          {{else}}
+          <p>No pipelines yet.</p>
+          {{end}}
+          {{end}}
+        </section>
+      </main>
+    </div>
+    <script>
+      const autosaveState = new Map();
+
+      function getEditorState(editor) {
+        const id = editor.getAttribute("data-skill-id") || "";
+        if (!autosaveState.has(id)) {
+          autosaveState.set(id, { inFlight: false, pending: false, retryTimer: null });
+        }
+        return autosaveState.get(id);
+      }
+
+      function setSaveStatus(editor, state, color) {
+        const status = editor.querySelector("[data-testid='autosave-status']");
+        if (!status) {
+          return;
+        }
+        let label = "Saved";
+        if (state === "saving") {
+          label = "Saving";
+        } else if (state === "retrying") {
+          label = "Retrying";
+        }
+        status.textContent = "✓";
+        status.setAttribute("data-save-state", state);
+        status.setAttribute("aria-label", label);
+        status.setAttribute("title", label);
+        status.style.color = color;
+      }
+
+      function scheduleRetry(editor) {
+        const state = getEditorState(editor);
+        if (state.retryTimer) {
+          clearTimeout(state.retryTimer);
+        }
+        state.retryTimer = window.setTimeout(() => {
+          saveEditor(editor);
+        }, 1000);
+      }
+
+      async function saveEditor(editor) {
+        const state = getEditorState(editor);
+        if (state.inFlight) {
+          state.pending = true;
+          return;
+        }
+
+        const form = editor.querySelector("[data-skill-form]");
+        if (!form) {
+          return;
+        }
+
+        const nameInput = form.querySelector("input[name='name']");
+        const promptInput = form.querySelector("textarea[name='prompt']");
+        if (!nameInput || !promptInput) {
+          return;
+        }
+
+        state.pending = false;
+        state.inFlight = true;
+        setSaveStatus(editor, "saving", "#6b7280");
+        const payload = new URLSearchParams();
+        payload.set("name", nameInput.value);
+        payload.set("prompt", promptInput.value);
+
+        try {
+          const response = await fetch(form.action, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+              "X-Autosave": "1"
+            },
+            body: payload.toString()
+          });
+          if (!response.ok) {
+            throw new Error("autosave failed");
+          }
+          if (state.retryTimer) {
+            clearTimeout(state.retryTimer);
+            state.retryTimer = null;
+          }
+          setSaveStatus(editor, "saved", "#047857");
+        } catch (_error) {
+          setSaveStatus(editor, "retrying", "#dc2626");
+          scheduleRetry(editor);
+        } finally {
+          state.inFlight = false;
+          if (state.pending) {
+            saveEditor(editor);
+          }
+        }
+      }
+
+      function wireAutosave() {
+        const editors = document.querySelectorAll("[data-skill-editor]");
+        for (const editor of editors) {
+          const form = editor.querySelector("[data-skill-form]");
+          const fields = form?.querySelectorAll("input[name='name'], textarea[name='prompt']");
+          if (!fields) {
+            continue;
+          }
+          for (const field of fields) {
+            field.addEventListener("input", () => {
+              const state = getEditorState(editor);
+              state.pending = true;
+              if (state.retryTimer) {
+                clearTimeout(state.retryTimer);
+                state.retryTimer = null;
+              }
+              saveEditor(editor);
+            });
+          }
+        }
+      }
+
+      function closeDeletePopovers(exceptControl) {
+        const controls = document.querySelectorAll("[data-delete-controls]");
+        for (const control of controls) {
+          if (exceptControl && control === exceptControl) {
+            continue;
+          }
+          const trigger = control.querySelector("[data-testid='delete-skill-trigger']");
+          const popover = control.querySelector("[data-delete-popover]");
+          if (trigger) {
+            trigger.setAttribute("aria-expanded", "false");
+          }
+          if (popover) {
+            popover.hidden = true;
+          }
+        }
+      }
+
+      function wireDeleteConfirmations() {
+        const editors = document.querySelectorAll("[data-skill-editor]");
+        for (const editor of editors) {
+          const control = editor.querySelector("[data-delete-controls]");
+          const trigger = editor.querySelector("[data-testid='delete-skill-trigger']");
+          const popover = editor.querySelector("[data-delete-popover]");
+          const confirm = editor.querySelector("[data-delete-confirm]");
+          const form = editor.querySelector("[data-skill-delete-form]");
+          if (!control || !trigger || !popover || !confirm || !form) {
+            continue;
+          }
+
+          trigger.addEventListener("click", (event) => {
+            event.stopPropagation();
+            const open = popover.hidden;
+            closeDeletePopovers(control);
+            popover.hidden = !open;
+            trigger.setAttribute("aria-expanded", open ? "true" : "false");
+          });
+
+          popover.addEventListener("click", (event) => {
+            event.stopPropagation();
+          });
+
+          confirm.addEventListener("click", (event) => {
+            event.stopPropagation();
+            closeDeletePopovers();
+            if (form.requestSubmit) {
+              form.requestSubmit();
+            } else {
+              form.submit();
+            }
+          });
+        }
+
+        document.addEventListener("click", (event) => {
+          for (const control of document.querySelectorAll("[data-delete-controls]")) {
+            if (control.contains(event.target)) {
+              return;
+            }
+          }
+          closeDeletePopovers();
+        });
+      }
+
+      function wirePipelineStepReorder() {
+        const list = document.getElementById("pipeline-step-nav-list");
+        if (!list) {
+          return;
+        }
+        let dragging = null;
+        const rows = list.querySelectorAll("[data-testid='pipeline-step-nav-item']");
+        for (const row of rows) {
+          row.addEventListener("dragstart", () => {
+            dragging = row;
+            row.style.opacity = "0.6";
+          });
+          row.addEventListener("dragend", () => {
+            row.style.opacity = "1";
+            dragging = null;
+          });
+          row.addEventListener("dragover", (event) => {
+            event.preventDefault();
+          });
+          row.addEventListener("drop", async (event) => {
+            event.preventDefault();
+            if (!dragging || dragging === row) {
+              return;
+            }
+            const draggingID = dragging.getAttribute("data-step-id");
+            const targetID = row.getAttribute("data-step-id");
+            const endpoint = dragging.getAttribute("data-reorder-endpoint");
+            if (!draggingID || !targetID || !endpoint) {
+              return;
+            }
+
+            list.insertBefore(dragging, row);
+            const payload = new URLSearchParams();
+            payload.set("target_step_id", targetID);
+            try {
+              const response = await fetch(endpoint, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+                },
+                body: payload.toString()
+              });
+              if (!response.ok) {
+                throw new Error("reorder failed");
+              }
+            } catch (_error) {
+              window.location.reload();
+            }
+          });
+        }
+      }
+
+      function normalizeLowercaseField(field) {
+        const nextValue = field.value.toLowerCase();
+        if (field.value !== nextValue) {
+          field.value = nextValue;
+        }
+      }
+
+      function wireLowercaseInputs() {
+        const lowercaseFields = document.querySelectorAll(
+          "input[data-lowercase-field='pipeline-name'], input[data-lowercase-field='pipeline-step-title']"
+        );
+        for (const field of lowercaseFields) {
+          normalizeLowercaseField(field);
+          field.addEventListener("input", () => {
+            normalizeLowercaseField(field);
+          });
+        }
+      }
+
+      wireLowercaseInputs();
+      wireAutosave();
+      wireDeleteConfirmations();
+      wirePipelineStepReorder();
+    </script>
+  </body>
+</html>

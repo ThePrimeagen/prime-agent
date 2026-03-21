@@ -1,4 +1,26 @@
+import * as fs from "fs";
+import * as path from "path";
 import { expect, Page, test } from "@playwright/test";
+
+const e2eDataDir = path.join(process.cwd(), ".tmp/e2e_data");
+
+test.beforeEach(() => {
+  try {
+    fs.rmSync(path.join(e2eDataDir, "skills"), { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  try {
+    fs.rmSync(path.join(e2eDataDir, "pipelines"), { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  try {
+    fs.unlinkSync(path.join(e2eDataDir, "counter.json"));
+  } catch {
+    /* ignore */
+  }
+});
 
 function uniqueSuffix(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
@@ -22,8 +44,8 @@ async function createPipelineByRequest(request: Page["request"], name: string): 
   expect(response.status()).toBe(303);
   const location = response.headers()["location"] ?? "";
   const id = location.split("/").pop() ?? "";
-  expect(id).toMatch(/^\d+$/);
-  return id;
+  expect(id.length).toBeGreaterThan(0);
+  return decodeURIComponent(id);
 }
 
 async function createSkillByRequest(
@@ -38,8 +60,8 @@ async function createSkillByRequest(
   expect(response.status()).toBe(303);
   const location = response.headers()["location"] ?? "";
   const id = location.split("/").pop() ?? "";
-  expect(id).toMatch(/^\d+$/);
-  return id;
+  expect(id.length).toBeGreaterThan(0);
+  return decodeURIComponent(id);
 }
 
 test("GET / renders tabbed shell and defaults to Pipeline view", async ({
@@ -90,7 +112,7 @@ test("create pipeline happy path from left nav plus button", async ({ page }) =>
   await page.locator("dialog#pipeline-modal input[name='name']").fill(name);
   await page.locator("dialog#pipeline-modal button[type='submit']").click();
 
-  await expect(page).toHaveURL(new RegExp(`/pipelines/\\d+$`));
+  await expect(page).toHaveURL(new RegExp(`/pipelines/[a-z0-9-]+$`));
   await expect(page.locator("#pipeline-title")).toHaveText(name);
   await expect(page.getByTestId("pipeline-nav-link").filter({ hasText: name })).toBeVisible();
 });
@@ -107,7 +129,7 @@ test("pipeline name input lowercases in real time and persists lowercase", async
   await expect(input).toHaveValue(normalizedName);
 
   await page.locator("dialog#pipeline-modal button[type='submit']").click();
-  await expect(page).toHaveURL(new RegExp(`/pipelines/\\d+$`));
+  await expect(page).toHaveURL(new RegExp(`/pipelines/[a-z0-9-]+$`));
   await expect(page.locator("#pipeline-title")).toHaveText(normalizedName);
   await expect(page.getByTestId("pipeline-nav-link").filter({ hasText: normalizedName })).toBeVisible();
 });
@@ -189,7 +211,7 @@ test("create skill happy path from Skills tab", async ({ page }) => {
   await page.locator("dialog#skill-modal textarea[name='prompt']").fill(prompt);
   await page.locator("dialog#skill-modal button[type='submit']").click();
 
-  await expect(page).toHaveURL(new RegExp(`/skills/\\d+$`));
+  await expect(page).toHaveURL(new RegExp(`/skills/[a-z0-9-]+$`));
   await expect(page.locator(`input[name="name"][value="${name}"]`)).toBeVisible();
   await expect(page.locator("#skills-main-panel textarea[name='prompt']")).toHaveValue(prompt);
 });
@@ -267,7 +289,7 @@ test("autosave update happy path persists edits while typing", async ({
 
   await page.goto("/skills");
   await page.getByTestId("skill-nav-link").filter({ hasText: originalName }).click();
-  await expect(page).toHaveURL(/\/skills\/\d+$/);
+  await expect(page).toHaveURL(/\/skills\/[a-z0-9-]+$/);
 
   const editor = page.locator("[data-skill-editor]");
   await expect(editor).toBeVisible();
@@ -312,7 +334,7 @@ test("delete skill happy path removes row from page", async ({ page, request }) 
 
   await page.goto("/skills");
   await page.getByTestId("skill-nav-link").filter({ hasText: name }).click();
-  await expect(page).toHaveURL(/\/skills\/\d+$/);
+  await expect(page).toHaveURL(/\/skills\/[a-z0-9-]+$/);
 
   const editor = page.locator("[data-skill-editor]");
   await editor.locator("[data-testid='delete-skill-trigger']").click();
@@ -338,7 +360,7 @@ test("delete popover closes on outside click without deleting", async ({
 
   await page.goto("/skills");
   await page.getByTestId("skill-nav-link").filter({ hasText: name }).click();
-  await expect(page).toHaveURL(/\/skills\/\d+$/);
+  await expect(page).toHaveURL(/\/skills\/[a-z0-9-]+$/);
 
   const editor = page.locator("[data-skill-editor]");
   await editor.locator("[data-testid='delete-skill-trigger']").click();
@@ -451,7 +473,7 @@ test("skills detail main area renders from /skills/:id", async ({ page, request 
   const location = createResponse.headers()["location"] ?? "";
 
   await page.goto(location);
-  await expect(page).toHaveURL(/\/skills\/\d+$/);
+  await expect(page).toHaveURL(/\/skills\/[a-z0-9-]+$/);
   await expect(page.locator(`input[name="name"][value="${name}"]`)).toBeVisible();
   await expect(page.locator("#skills-main-panel textarea[name='prompt']")).toHaveValue(prompt);
 });
@@ -864,4 +886,148 @@ test("pipeline step skill count updates after add and remove skill", async ({ pa
   expect(remove.status()).toBe(303);
   await page.reload();
   await expect(page.getByTestId("pipeline-step-skill-count")).toContainText("0");
+});
+
+test("create skill unhappy path rejects duplicate name", async ({ request }) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-dup-skill-${suffix}`;
+  const first = await request.post("/skills", {
+    form: { name, prompt: "first" },
+    maxRedirects: 0,
+  });
+  expect(first.status()).toBe(303);
+  const second = await request.post("/skills", {
+    form: { name, prompt: "second" },
+    maxRedirects: 0,
+  });
+  expect(second.status()).toBe(400);
+  await expect(second.text()).resolves.toContain("skill already exists");
+});
+
+test("create skill unhappy path rejects empty prompt", async ({ request }) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-empty-prompt-${suffix}`;
+  const response = await request.post("/skills", {
+    form: { name, prompt: "   " },
+    maxRedirects: 0,
+  });
+  expect(response.status()).toBe(400);
+  await expect(response.text()).resolves.toContain("prompt is required");
+});
+
+test("update skill unhappy path rejects rename to existing skill name", async ({
+  request,
+}) => {
+  const suffix = uniqueSuffix();
+  const a = `e2e-collision-a-${suffix}`;
+  const b = `e2e-collision-b-${suffix}`;
+  await request.post("/skills", { form: { name: a, prompt: "a" }, maxRedirects: 0 });
+  const createB = await request.post("/skills", {
+    form: { name: b, prompt: "b" },
+    maxRedirects: 0,
+  });
+  expect(createB.status()).toBe(303);
+  const locB = createB.headers()["location"] ?? "";
+  const collision = await request.post(`${locB}/update`, {
+    form: { name: a, prompt: "b-updated" },
+    maxRedirects: 0,
+  });
+  expect(collision.status()).toBe(400);
+  await expect(collision.text()).resolves.toContain("skill already exists");
+});
+
+test("GET missing skill slug returns 404", async ({ request }) => {
+  const response = await request.get("/skills/does-not-exist-skill-zzzz");
+  expect(response.status()).toBe(404);
+});
+
+test("GET missing pipeline name returns 404", async ({ request }) => {
+  const response = await request.get("/pipelines/does-not-exist-pipeline-zzzz");
+  expect(response.status()).toBe(404);
+});
+
+test("GET missing pipeline step id returns 404", async ({ request }) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(request, `missing-step-${suffix}`);
+  const response = await request.get(`/pipelines/${pipelineID}/steps/999999`);
+  expect(response.status()).toBe(404);
+});
+
+test("create pipeline unhappy path rejects duplicate name", async ({ request }) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-dup-pipeline-${suffix}`;
+  const first = await request.post("/pipelines", { form: { name }, maxRedirects: 0 });
+  expect(first.status()).toBe(303);
+  const second = await request.post("/pipelines", { form: { name }, maxRedirects: 0 });
+  expect(second.status()).toBe(400);
+  await expect(second.text()).resolves.toContain("pipeline exists");
+});
+
+test("add pipeline step skill unhappy path rejects empty skill_id", async ({
+  request,
+}) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(request, `empty-skill-id-${suffix}`);
+  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
+    form: { title: `step-${suffix}`, prompt: "p" },
+    maxRedirects: 0,
+  });
+  expect(createStep.status()).toBe(303);
+  const stepID = (createStep.headers()["location"] ?? "").split("/").pop() ?? "";
+  const response = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
+    form: { skill_id: "   " },
+  });
+  expect(response.status()).toBe(400);
+  await expect(response.text()).resolves.toContain("skill_id is required");
+});
+
+test("add pipeline step skill unhappy path returns 404 for unknown skill", async ({
+  request,
+}) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(request, `unknown-skill-${suffix}`);
+  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
+    form: { title: `step-${suffix}`, prompt: "p" },
+    maxRedirects: 0,
+  });
+  expect(createStep.status()).toBe(303);
+  const stepID = (createStep.headers()["location"] ?? "").split("/").pop() ?? "";
+  const response = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
+    form: { skill_id: `no-such-skill-${suffix}` },
+  });
+  expect(response.status()).toBe(404);
+});
+
+test("pipeline step reorder unhappy path rejects non-numeric target_step_id", async ({
+  request,
+}) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(request, `reorder-bad-parse-${suffix}`);
+  const s1 = await request.post(`/pipelines/${pipelineID}/steps`, {
+    form: { title: `r1-${suffix}`, prompt: "a" },
+    maxRedirects: 0,
+  });
+  expect(s1.status()).toBe(303);
+  const stepID = (s1.headers()["location"] ?? "").split("/").pop() ?? "";
+  const response = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/reorder`, {
+    form: { target_step_id: "not-a-number" },
+  });
+  expect(response.status()).toBe(400);
+  await expect(response.text()).resolves.toContain("target_step_id is required");
+});
+
+test("GET /fragments/counter returns incrementing count", async ({ request }) => {
+  const a = await request.get("/fragments/counter");
+  const b = await request.get("/fragments/counter");
+  expect(a.status()).toBe(200);
+  expect(b.status()).toBe(200);
+  const textA = await a.text();
+  const textB = await b.text();
+  expect(textA).toMatch(/hello world \d+/);
+  expect(textB).toMatch(/hello world \d+/);
+  const nA = Number((textA.match(/hello world (\d+)/) ?? [])[1]);
+  const nB = Number((textB.match(/hello world (\d+)/) ?? [])[1]);
+  expect(Number.isFinite(nA)).toBe(true);
+  expect(Number.isFinite(nB)).toBe(true);
+  expect(nB).toBe(nA + 1);
 });
