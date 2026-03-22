@@ -53,7 +53,7 @@ fn ensure_dot_prime_agent_config() -> Result<()> {
     if !path.exists() {
         fs::write(
             &path,
-            "{\n  \"model\": null,\n  \"cli\": null\n}\n",
+            "{\n  \"model\": null,\n  \"clirunner\": null,\n  \"stdout_lines\": 3\n}\n",
         )
         .context("write .prime-agent/config.json")?;
     }

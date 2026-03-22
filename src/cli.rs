@@ -67,6 +67,29 @@ pub enum Command {
     DeleteGlobally {
         name: String,
     },
+    /// Run pipeline stages (cursor-agent)
+    Pipelines {
+        #[command(subcommand)]
+        action: PipelinesAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PipelinesAction {
+    /// Execute pipeline stages; outputs under .prime-agent/pipeline-<name>/
+    Run {
+        /// Pipeline name (kebab-case, must exist under data-dir/pipelines/)
+        name: String,
+        /// User prompt text (mutually exclusive with --file)
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Read user prompt from a UTF-8 file (mutually exclusive with --prompt)
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Disable full-screen TUI (also `PRIME_AGENT_NO_TUI=1`)
+        #[arg(long)]
+        no_tui: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

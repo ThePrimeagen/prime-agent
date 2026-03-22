@@ -3,9 +3,12 @@ use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use predicates::str::contains as contains_text;
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 
 fn cmd_with_skills_dir(temp: &TempDir, skills_dir: &Path) -> Command {
@@ -693,4 +696,440 @@ fn sync_remote_commits_and_pulls() {
     let mut cmd = cmd_with_skills_dir(&temp, &skills_dir);
     cmd.arg("sync-remote").write_stdin("a\n");
     cmd.assert().success();
+}
+
+fn write_dot_prime_agent_config(temp: &TempDir, model: &str, clirunner: &str) {
+    let d = temp.path().join(".prime-agent");
+    fs::create_dir_all(&d).expect("dot dir");
+    let j = json!({ "model": model, "clirunner": clirunner });
+    fs::write(
+        d.join("config.json"),
+        format!("{}\n", serde_json::to_string_pretty(&j).expect("json")),
+    )
+    .expect("dot config");
+}
+
+fn chmod_x(path: &Path) {
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(path).expect("meta").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod");
+    }
+}
+
+fn write_pipeline(data_dir: &Path, name: &str, steps: &str) {
+    let dir = data_dir.join("pipelines").join(name);
+    fs::create_dir_all(&dir).expect("pipeline dir");
+    fs::write(dir.join("pipeline.json"), steps).expect("pipeline.json");
+}
+
+fn pipelines_cmd(temp: &TempDir, data_dir: &Path, skills_dir: &Path, bin_dir: &Path) -> Command {
+    let path_var = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut cmd = cargo_bin_cmd!("prime-agent");
+    cmd.current_dir(temp.path())
+        .env("PATH", path_var)
+        .env("PRIME_AGENT_DATA_DIR", data_dir)
+        .env("PRIME_AGENT_NO_TUI", "1")
+        .env("XDG_CONFIG_HOME", temp.path().join("config"))
+        .arg("--skills-dir")
+        .arg(skills_dir);
+    cmd
+}
+
+#[test]
+fn pipelines_run_errors_when_neither_prompt_nor_file() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(&mock, "#!/bin/sh\necho '{\"text\":\"x\"}'\n").expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl"]);
+    cmd.assert().failure();
+}
+
+#[test]
+fn pipelines_run_errors_when_both_prompt_and_file() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(&mock, "#!/bin/sh\necho '{\"text\":\"x\"}'\n").expect("mock");
+    chmod_x(&mock);
+    let f = temp.path().join("prompt.txt");
+    fs::write(&f, "hi").expect("f");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "a", "--file"])
+        .arg(&f);
+    cmd.assert().failure();
+}
+
+#[test]
+fn pipelines_run_errors_when_dot_prime_agent_config_missing() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(&mock, "#!/bin/sh\necho '{\"text\":\"x\"}'\n").expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "x"]);
+    cmd.assert().failure();
+}
+
+#[test]
+fn pipelines_run_errors_on_unsupported_clirunner() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "other-cli");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(&mock, "#!/bin/sh\necho '{\"text\":\"x\"}'\n").expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "x"]);
+    cmd.assert().failure().stderr(contains("unsupported clirunner"));
+}
+
+#[test]
+fn pipelines_run_writes_stage_files_under_pipeline_dir() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "composer-2-fast", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "demo-pipe",
+        r#"{"steps":[{"id":1,"title":"stepone","prompt":"doprompt","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(
+        &mock,
+        "#!/bin/sh\ncat >/dev/null\necho '{\"text\":\"out1\"}'\n",
+    )
+    .expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "demo-pipe", "--prompt", "userhi"]);
+    cmd.assert().success();
+
+    let one = temp
+        .path()
+        .join(".prime-agent/pipeline-demo-pipe/1.json");
+    let raw = fs::read_to_string(&one).expect("1.json");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+    assert_eq!(v["stage"], 1);
+    assert_eq!(v["stdout"].as_array().expect("stdout").len(), 1);
+    assert_eq!(v["stderr"].as_array().expect("stderr").len(), 1);
+    assert_eq!(v["output"], json!(["out1"]));
+}
+
+#[test]
+fn pipelines_run_parallel_skills_two_outputs() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(skills_dir.join("alpha")).expect("a");
+    fs::create_dir_all(skills_dir.join("beta")).expect("b");
+    fs::write(skills_dir.join("alpha/SKILL.md"), "A\n").expect("a");
+    fs::write(skills_dir.join("beta/SKILL.md"), "B\n").expect("b");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"t","prompt":"p","skills":["beta","alpha"]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(
+        &mock,
+        "#!/bin/sh\ncat >/dev/null\necho '{\"text\":\"parallel\"}'\n",
+    )
+    .expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.assert().success();
+
+    let raw = fs::read_to_string(
+        temp.path()
+            .join(".prime-agent/pipeline-pl/1.json"),
+    )
+    .expect("1.json");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+    let names = v["name"].as_array().expect("name arr");
+    assert_eq!(names.len(), 2);
+    let out = v["output"].as_array().expect("out");
+    assert_eq!(out.len(), 2);
+    let st = v["stdout"].as_array().expect("stdout arr");
+    assert_eq!(st.len(), 2);
+}
+
+#[test]
+fn pipelines_run_second_stage_receives_prior_stage_files_in_prompt() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"s1","prompt":"p1","skills":[]},{"id":2,"title":"s2","prompt":"p2","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let stdin_log = temp.path().join("stdin.log");
+    let mock = bin.join("cursor-agent");
+    let body = format!(
+        "#!/bin/sh\ncat > \"{}\"\necho '{{\"text\":\"ok\"}}'\n",
+        stdin_log.display()
+    );
+    fs::write(&mock, body).expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.assert().success();
+
+    let stage2 = fs::read_to_string(&stdin_log).expect("stdin");
+    assert!(
+        stage2.contains("### Stage file 1.json") || stage2.contains("\"stage\":1"),
+        "expected prior stage content in stage-2 prompt: {stage2}"
+    );
+}
+
+#[test]
+fn pipelines_run_resume_skips_completed_stage() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"s1","prompt":"p1","skills":[]},{"id":2,"title":"s2","prompt":"p2","skills":[]}]}"#,
+    );
+    let out_dir = temp.path().join(".prime-agent/pipeline-pl");
+    fs::create_dir_all(&out_dir).expect("out");
+    fs::write(
+        out_dir.join("meta.json"),
+        r#"{"run_name":"Fixed Name","pipeline":"pl","model":"m","clirunner":"cursor-agent"}
+"#,
+    )
+    .expect("meta");
+    fs::write(
+        out_dir.join("1.json"),
+        r#"{"stage":1,"step_id":1,"title":"s1","name":[""],"input_prompt":["x"],"output":["done"],"stdout":["so"],"stderr":[""]}
+"#,
+    )
+    .expect("1.json");
+
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let argv_log = temp.path().join("argv.log");
+    let mock = bin.join("cursor-agent");
+    let body = format!(
+        "#!/bin/sh\necho \"$@\" >> \"{}\"\ncat >/dev/null\necho '{{\"text\":\"two\"}}'\n",
+        argv_log.display()
+    );
+    fs::write(&mock, body).expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.assert().success();
+
+    let logged = fs::read_to_string(&argv_log).expect("argv log");
+    assert_eq!(
+        logged.lines().filter(|l| !l.is_empty()).count(),
+        1,
+        "expected only stage 2 to invoke cursor-agent: {logged}"
+    );
+}
+
+#[test]
+fn pipelines_run_prints_adjective_noun_first_line() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(
+        &mock,
+        "#!/bin/sh\ncat >/dev/null\necho '{\"text\":\"x\"}'\n",
+    )
+    .expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    let out = cmd.assert().success().get_output().stdout.clone();
+    let text = String::from_utf8_lossy(&out);
+    let first = text
+        .lines()
+        .find(|l| !l.contains("prime-agent("))
+        .expect("line");
+    let parts: Vec<&str> = first.split_whitespace().collect();
+    assert_eq!(parts.len(), 2, "first line should be two words: {first:?}");
+}
+
+#[test]
+fn pipelines_run_passes_model_and_yolo_to_subprocess() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "composer-2-fast", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let argv_log = temp.path().join("argv.log");
+    let mock = bin.join("cursor-agent");
+    let body = format!(
+        "#!/bin/sh\necho \"$@\" >> \"{}\"\ncat >/dev/null\necho '{{\"text\":\"x\"}}'\n",
+        argv_log.display()
+    );
+    fs::write(&mock, body).expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.assert().success();
+
+    let logged = fs::read_to_string(&argv_log).expect("log");
+    assert!(logged.contains("--model"));
+    assert!(logged.contains("composer-2-fast"));
+    assert!(logged.contains("--yolo"));
+}
+
+#[test]
+fn pipelines_run_reads_prompt_from_file() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let stdin_log = temp.path().join("stdin.log");
+    let mock = bin.join("cursor-agent");
+    let body = format!(
+        "#!/bin/sh\ncat > \"{}\"\necho '{{\"text\":\"x\"}}'\n",
+        stdin_log.display()
+    );
+    fs::write(&mock, body).expect("mock");
+    chmod_x(&mock);
+    let pf = temp.path().join("user.txt");
+    fs::write(&pf, "unique-file-content-xyz").expect("pf");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--file"])
+        .arg(&pf);
+    cmd.assert().success();
+
+    let s = fs::read_to_string(&stdin_log).expect("stdin");
+    assert!(s.contains("unique-file-content-xyz"));
+}
+
+#[test]
+fn pipelines_run_stage_json_includes_stdout_stderr_and_error_on_failure() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(
+        &mock,
+        "#!/bin/sh\necho boom >&2\nexit 7\n",
+    )
+    .expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.assert().failure();
+
+    let raw = fs::read_to_string(temp.path().join(".prime-agent/pipeline-pl/1.json"))
+        .expect("1.json");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+    assert!(v.get("error").is_some());
+    assert_eq!(v["stdout"].as_array().expect("stdout").len(), 1);
+    assert_eq!(v["stderr"].as_array().expect("stderr").len(), 1);
 }

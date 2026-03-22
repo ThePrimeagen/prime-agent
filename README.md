@@ -21,6 +21,17 @@ instructions stored as Markdown files.
 - `prime-agent config`: Print required and optional config values.
 - `prime-agent config get <name>`: Print a config value.
 - `prime-agent config set <name> <value>`: Set a config value and print all values.
+- `prime-agent pipelines run <name> --prompt <text>` or `--file <path>`: Run pipeline stages (see `.prime-agent/config.json`).
+
+## `.prime-agent/config.json` (pipelines)
+
+| Key | Meaning |
+| --- | --- |
+| `model` | Model string passed to `cursor-agent --model`. |
+| `clirunner` | CLI to invoke; must be `cursor-agent` (legacy key `cli` is accepted as an alias). |
+| `stdout_lines` | In the pipeline TUI, how many trailing stdout lines to show per skill (default `3`; must be at least `1`). |
+
+Disable the full-screen TUI with `--no-tui` or `PRIME_AGENT_NO_TUI=1` (for CI or non-interactive runs).
 
 ## Skills Directory
 

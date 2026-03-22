@@ -3,7 +3,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use std::collections::HashMap;
 use std::env;
+use std::io::{stdout, IsTerminal};
 use std::path::{Path, PathBuf};
 
 mod agents_md;
@@ -11,15 +13,21 @@ mod cli;
 mod config;
 mod counter;
 mod data_dir;
+mod dot_prime_agent_config;
+mod pipeline_run;
+mod pipeline_tui;
+mod pipeline_ui_state;
 mod pipeline_store;
+mod stdout_tail;
 mod serve;
 mod skills_store;
 mod sync;
 mod web;
 
 use crate::agents_md::AgentSection;
-use crate::cli::{Cli, Command, ConfigAction};
+use crate::cli::{Cli, Command, ConfigAction, PipelinesAction};
 use crate::config::Config;
+use crate::pipeline_run::PipelineRunOptions;
 use crate::skills_store::SkillsStore;
 
 fn main() -> Result<()> {
@@ -40,6 +48,11 @@ fn main() -> Result<()> {
             .clone()
             .unwrap_or_else(|| "127.0.0.1:8080".to_string());
         serve::run_blocking(data_dir, bind)?;
+        return Ok(());
+    }
+
+    if let Command::Pipelines { action } = &cli.command {
+        run_pipelines_command(&cli, &overrides, action)?;
         return Ok(());
     }
 
@@ -76,6 +89,9 @@ fn main() -> Result<()> {
         Command::Serve { .. } => {
             unreachable!("serve command handled before skills setup");
         }
+        Command::Pipelines { .. } => {
+            unreachable!("pipelines command handled before skills setup");
+        }
         Command::Delete { name } => {
             SkillsStore::validate_name(&name)?;
             let contents = std::fs::read_to_string(&agents_path)
@@ -96,6 +112,62 @@ fn main() -> Result<()> {
                     .with_context(|| format!("failed to write '{}'", agents_path.display()))?;
             }
             skills_store.delete_skill(&name)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_pipelines_command(
+    cli: &Cli,
+    overrides: &HashMap<String, String>,
+    action: &PipelinesAction,
+) -> Result<()> {
+    let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+    let skills_dir = resolve_skills_dir(cli, overrides)?;
+    let dot_path = std::env::current_dir()
+        .context("current_dir for .prime-agent/config.json")?
+        .join(".prime-agent")
+        .join("config.json");
+    let dot = crate::dot_prime_agent_config::load(&dot_path)?;
+    match action {
+        PipelinesAction::Run {
+            name,
+            prompt,
+            file,
+            no_tui,
+        } => {
+            let user_text = match (prompt.as_ref(), file.as_ref()) {
+                (Some(p), None) => p.clone(),
+                (None, Some(f)) => std::fs::read_to_string(f)
+                    .with_context(|| format!("read user prompt file '{}'", f.display()))?,
+                (None, None) => {
+                    return Err(anyhow!(
+                        "provide exactly one of --prompt or --file for pipelines run"
+                    ));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(anyhow!("use only one of --prompt or --file, not both"));
+                }
+            };
+            let skills_store = SkillsStore::new(skills_dir);
+            let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
+            let no_tui_env = env::var("PRIME_AGENT_NO_TUI")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            let use_tui = !*no_tui && !no_tui_env && stdout().is_terminal();
+            let options = PipelineRunOptions {
+                use_tui,
+                stdout_lines: dot.stdout_lines,
+            };
+            crate::pipeline_run::run(
+                name,
+                &user_text,
+                &data_dir,
+                &skills_store,
+                &dot,
+                &cwd,
+                options,
+            )?;
         }
     }
     Ok(())
@@ -191,7 +263,7 @@ fn handle_config_command(action: Option<&ConfigAction>) -> Result<()> {
 
 fn resolve_skills_dir(
     cli: &Cli,
-    overrides: &std::collections::HashMap<String, String>,
+    overrides: &HashMap<String, String>,
 ) -> Result<PathBuf> {
     if let Some(path) = overrides.get("skills-dir").map(PathBuf::from) {
         return Ok(path);
@@ -216,8 +288,8 @@ fn resolve_skills_dir(
     Ok(data_dir.join("skills"))
 }
 
-fn parse_config_overrides(values: &[String]) -> Result<std::collections::HashMap<String, String>> {
-    let mut overrides = std::collections::HashMap::new();
+fn parse_config_overrides(values: &[String]) -> Result<HashMap<String, String>> {
+    let mut overrides = HashMap::new();
     for value in values {
         let Some((key, raw_value)) = value.split_once(':') else {
             return Err(anyhow!("invalid --config value '{value}', expected key:value"));
