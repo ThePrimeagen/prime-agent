@@ -269,7 +269,6 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
     match op {
         ClientOp::CreateSkill { id, name, prompt } => {
             let name = name.trim().to_string();
-            let prompt = prompt.trim().to_string();
             if prompt.is_empty() {
                 return ack_err(&id, "prompt is required");
             }
@@ -302,7 +301,6 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             prompt,
         } => {
             let new_name = name.trim().to_string();
-            let prompt = prompt.trim().to_string();
             if prompt.is_empty() {
                 return ack_err(&id, "prompt is required");
             }

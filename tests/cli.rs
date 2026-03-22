@@ -819,6 +819,15 @@ fn write_pipeline(data_dir: &Path, name: &str, steps: &str) {
     fs::write(dir.join("pipeline.json"), steps).expect("pipeline.json");
 }
 
+/// Everything after the first line of stdout (the `prime-agent(version)` banner).
+fn stdout_after_version_line(stdout: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stdout);
+    match text.split_once('\n') {
+        Some((_, rest)) => rest.to_string(),
+        None => String::new(),
+    }
+}
+
 fn pipelines_cmd(temp: &TempDir, data_dir: &Path, skills_dir: &Path, bin_dir: &Path) -> Command {
     let path_var = format!(
         "{}:{}",
@@ -834,6 +843,133 @@ fn pipelines_cmd(temp: &TempDir, data_dir: &Path, skills_dir: &Path, bin_dir: &P
         .arg("--skills-dir")
         .arg(skills_dir);
     cmd
+}
+
+#[test]
+fn pipelines_default_no_subcommand_lists_two_sorted() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_pipeline(
+        &data_dir,
+        "beta",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    write_pipeline(
+        &data_dir,
+        "alpha",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.arg("pipelines");
+    let out = cmd.assert().success().get_output().stdout.clone();
+    assert_eq!(
+        stdout_after_version_line(&out),
+        "alpha\n\nbeta\n"
+    );
+}
+
+#[test]
+fn pipelines_default_no_subcommand_lists_one() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_pipeline(
+        &data_dir,
+        "solo",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.arg("pipelines");
+    let out = cmd.assert().success().get_output().stdout.clone();
+    assert_eq!(stdout_after_version_line(&out), "solo\n");
+}
+
+#[test]
+fn pipelines_default_no_subcommand_empty_stderr() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    fs::create_dir_all(&data_dir).expect("data");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.arg("pipelines");
+    let out = cmd.assert().success().get_output().clone();
+    assert_eq!(stdout_after_version_line(&out.stdout), "");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("No pipelines found."));
+}
+
+#[test]
+fn pipelines_default_no_subcommand_ignores_incomplete_dir() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    fs::create_dir_all(data_dir.join("pipelines/incomplete")).expect("incomplete");
+    write_pipeline(
+        &data_dir,
+        "good",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.arg("pipelines");
+    let out = cmd.assert().success().get_output().stdout.clone();
+    assert_eq!(stdout_after_version_line(&out), "good\n");
+}
+
+#[test]
+fn pipelines_default_no_subcommand_respects_global_data_dir() {
+    let temp = TempDir::new().expect("temp");
+    let wrong = temp.path().join("wrong");
+    let right = temp.path().join("right");
+    fs::create_dir_all(&wrong).expect("wrong");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_pipeline(
+        &right,
+        "only",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut cmd = pipelines_cmd(&temp, &wrong, &skills_dir, &bin);
+    cmd.env_remove("PRIME_AGENT_DATA_DIR")
+        .args(["--data-dir", right.to_str().expect("utf8 path"), "pipelines"]);
+    let out = cmd.assert().success().get_output().stdout.clone();
+    assert_eq!(stdout_after_version_line(&out), "only\n");
+}
+
+#[test]
+fn pipelines_help_mentions_default_behavior() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["pipelines", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(contains_text("run"))
+        .stdout(contains_text("pipeline"));
 }
 
 #[test]

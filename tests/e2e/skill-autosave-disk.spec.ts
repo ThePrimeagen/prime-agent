@@ -27,7 +27,7 @@ test("skill editor autosave persists prompt to SKILL.md on disk", async ({ page,
   const skillPath = path.join(e2eDataDir, "skills", name, "SKILL.md");
   await expect
     .poll(
-      () => fs.readFileSync(skillPath, "utf8").trim() === updatedPrompt,
+      () => fs.readFileSync(skillPath, "utf8") === updatedPrompt,
       { timeout: 10_000 },
     )
     .toBe(true);

@@ -180,7 +180,7 @@ impl PipelineStore {
         prompt: &str,
     ) -> Result<i64> {
         let title = title.trim().to_lowercase();
-        let prompt = prompt.trim().to_string();
+        let prompt = prompt.to_string();
         if title.is_empty() || prompt.is_empty() {
             return Err(anyhow!("title and prompt are required"));
         }
@@ -204,7 +204,7 @@ impl PipelineStore {
         prompt: &str,
     ) -> Result<()> {
         let title = title.trim().to_lowercase();
-        let prompt = prompt.trim().to_string();
+        let prompt = prompt.to_string();
         if title.is_empty() || prompt.is_empty() {
             return Err(anyhow!("title and prompt are required"));
         }

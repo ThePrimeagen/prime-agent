@@ -67,10 +67,10 @@ pub enum Command {
     DeleteGlobally {
         name: String,
     },
-    /// Run pipeline stages (cursor-agent)
+    /// Pipelines: omit the subcommand to pick a pipeline interactively (TTY) or list names (non-TTY); use `run` to invoke by name without the picker
     Pipelines {
         #[command(subcommand)]
-        action: PipelinesAction,
+        action: Option<PipelinesAction>,
     },
 }
 

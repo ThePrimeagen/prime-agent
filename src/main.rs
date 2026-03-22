@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use std::collections::HashMap;
 use std::env;
-use std::io::{stdout, IsTerminal};
+use std::io::{stdin, stdout, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 mod agents_md;
@@ -17,6 +17,7 @@ mod dot_prime_agent_config;
 mod generation;
 mod idle_commit;
 mod live_reload;
+mod pipeline_pick;
 mod pipeline_run;
 mod pipeline_tui;
 mod pipeline_ui_state;
@@ -31,6 +32,7 @@ use crate::agents_md::AgentSection;
 use crate::cli::{Cli, Command, ConfigAction, PipelinesAction};
 use crate::config::Config;
 use crate::pipeline_run::PipelineRunOptions;
+use crate::pipeline_store::PipelineStore;
 use crate::skills_store::SkillsStore;
 
 fn main() -> Result<()> {
@@ -55,7 +57,7 @@ fn main() -> Result<()> {
     }
 
     if let Command::Pipelines { action } = &cli.command {
-        run_pipelines_command(&cli, &overrides, action)?;
+        run_pipelines_command(&cli, &overrides, action.as_ref())?;
         return Ok(());
     }
 
@@ -123,22 +125,23 @@ fn main() -> Result<()> {
 fn run_pipelines_command(
     cli: &Cli,
     overrides: &HashMap<String, String>,
-    action: &PipelinesAction,
+    action: Option<&PipelinesAction>,
 ) -> Result<()> {
-    let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
-    let skills_dir = resolve_skills_dir(cli, overrides)?;
-    let dot_path = std::env::current_dir()
-        .context("current_dir for .prime-agent/config.json")?
-        .join(".prime-agent")
-        .join("config.json");
-    let dot = crate::dot_prime_agent_config::load(&dot_path)?;
     match action {
-        PipelinesAction::Run {
+        None => run_pipelines_default(cli, overrides),
+        Some(PipelinesAction::Run {
             name,
             prompt,
             file,
             no_tui,
-        } => {
+        }) => {
+            let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+            let skills_dir = resolve_skills_dir(cli, overrides)?;
+            let dot_path = std::env::current_dir()
+                .context("current_dir for .prime-agent/config.json")?
+                .join(".prime-agent")
+                .join("config.json");
+            let dot = crate::dot_prime_agent_config::load(&dot_path)?;
             let user_text = match (prompt.as_ref(), file.as_ref()) {
                 (Some(p), None) => p.clone(),
                 (None, Some(f)) => std::fs::read_to_string(f)
@@ -171,9 +174,74 @@ fn run_pipelines_command(
                 &cwd,
                 options,
             )?;
+            Ok(())
         }
     }
-    Ok(())
+}
+
+fn run_pipelines_default(cli: &Cli, overrides: &HashMap<String, String>) -> Result<()> {
+    let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+    let store = PipelineStore::new(&data_dir);
+    let names = store.list_pipeline_names()?;
+    if names.is_empty() {
+        eprintln!("No pipelines found.");
+        return Ok(());
+    }
+    if !stdout().is_terminal() {
+        print_pipeline_names(&names);
+        return Ok(());
+    }
+
+    let pipeline_name = pipeline_pick::pick_pipeline_interactive(&names)?;
+
+    let dot_path = std::env::current_dir()
+        .context("current_dir for .prime-agent/config.json")?
+        .join(".prime-agent")
+        .join("config.json");
+    let dot = crate::dot_prime_agent_config::load(&dot_path)?;
+    let skills_dir = resolve_skills_dir(cli, overrides)?;
+    let skills_store = SkillsStore::new(skills_dir);
+    let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
+    let no_tui_env = env::var("PRIME_AGENT_NO_TUI")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let use_tui = !no_tui_env && stdout().is_terminal();
+    let user_text = read_user_prompt_line()?;
+    let options = PipelineRunOptions {
+        use_tui,
+        stdout_lines: dot.stdout_lines,
+    };
+    crate::pipeline_run::run(
+        &pipeline_name,
+        &user_text,
+        &data_dir,
+        &skills_store,
+        &dot,
+        &cwd,
+        options,
+    )
+}
+
+fn print_pipeline_names(names: &[String]) {
+    let mut first = true;
+    for name in names {
+        if !first {
+            println!();
+        }
+        first = false;
+        println!("{name}");
+    }
+}
+
+fn read_user_prompt_line() -> Result<String> {
+    print!("User prompt: ");
+    stdout().flush().context("flush stdout")?;
+    let mut line = String::new();
+    stdin()
+        .lock()
+        .read_line(&mut line)
+        .context("read user prompt from stdin")?;
+    Ok(line.trim_end().to_string())
 }
 
 fn run_sync_cmd(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {

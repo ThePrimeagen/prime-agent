@@ -953,7 +953,7 @@ test("create pipeline step unhappy path rejects empty title or prompt", async ({
   expect(emptyTitle.ok).toBe(false);
   expect(emptyTitle.error ?? "").toContain("required");
 
-  const emptyPrompt = await wsCreateStep(page, pipelineID, "valid-title", "   ");
+  const emptyPrompt = await wsCreateStep(page, pipelineID, "valid-title", "");
   expect(emptyPrompt.ok).toBe(false);
   expect(emptyPrompt.error ?? "").toContain("required");
 });
@@ -1004,7 +1004,7 @@ test("edit pipeline step unhappy path rejects empty title or prompt and preserve
   expect(emptyTitle.ok).toBe(false);
   expect(emptyTitle.error ?? "").toContain("required");
 
-  const emptyPrompt = await wsUpdateStep(page, pipelineID, stepID, "valid-title", "   ");
+  const emptyPrompt = await wsUpdateStep(page, pipelineID, stepID, "valid-title", "");
   expect(emptyPrompt.ok).toBe(false);
   expect(emptyPrompt.error ?? "").toContain("required");
 
@@ -1156,9 +1156,30 @@ test("create skill unhappy path rejects empty prompt", async ({ page }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-empty-prompt-${suffix}`;
   await page.goto("/skills");
-  const response = await wsCreateSkill(page, name, "   ");
+  const response = await wsCreateSkill(page, name, "");
   expect(response.ok).toBe(false);
   expect(response.error ?? "").toContain("prompt is required");
+});
+
+test("skill prompt preserves leading and trailing whitespace on disk and in UI", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-ws-prompt-${suffix}`;
+  /* A lone leading newline is dropped by HTML textarea parsing; use spaces + trailing ws to exercise no-trim. */
+  const promptWithWs = `  ${suffix}-body  \n`;
+  await page.goto("/");
+  expect((await wsCreateSkill(page, name, promptWithWs)).ok).toBe(true);
+
+  const skillPath = path.join(e2eDataDir, "skills", name, "SKILL.md");
+  await expect
+    .poll(() => fs.readFileSync(skillPath, "utf8"), { timeout: 8000 })
+    .toBe(promptWithWs);
+
+  await page.goto("/skills");
+  await page.getByTestId("skill-nav-link").filter({ hasText: name }).click();
+  await expect(page.locator("#skills-main-panel textarea[name='prompt']")).toHaveValue(promptWithWs);
 });
 
 test("update skill unhappy path rejects rename to existing skill name", async ({ page }) => {
