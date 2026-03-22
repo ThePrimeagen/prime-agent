@@ -1,8 +1,7 @@
 /target
-.devtmp/
 prod.sql
 node_modules/
 playwright-report/
 test-results/
 .tmp/
-.prime-agent/
+.prime-agent
