@@ -42,12 +42,12 @@ function uniqueSuffix(): string {
 
 async function openSkillsTab(page: Page) {
   await page.getByTestId("tab-skills").click();
-  await expect(page).toHaveURL(/\/skills$/);
+  await expect(page).toHaveURL(/\/skills(\/[^/]+)?$/);
 }
 
 async function openPipelineTab(page: Page) {
   await page.getByTestId("tab-pipeline").click();
-  await expect(page).toHaveURL(/\/pipelines$/);
+  await expect(page).toHaveURL(/\/pipelines(\/[^/]+)?$/);
 }
 
 async function createPipelineByRequest(page: Page, name: string): Promise<string> {
@@ -109,7 +109,233 @@ test("skills icon navigates to /skills", async ({ page }) => {
   await expect(page.locator("#skills-main-panel")).toBeVisible();
 });
 
-test("create pipeline happy path from left nav plus button", async ({ page }) => {
+test("skill name input keeps focus after rename autosave and ui broadcast", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-focus-${suffix}`;
+  const renamed = `${name}-ren`;
+
+  await createSkillByRequest(page, name, `prompt-${suffix}`);
+  await page.goto(`/skills/${encodeURIComponent(name)}`);
+
+  const nameInput = page.locator("[data-skill-editor] input[name='name']");
+  await expect(nameInput).toBeVisible();
+  await nameInput.click();
+  await nameInput.fill(renamed);
+
+  await expect
+    .poll(
+      async () =>
+        nameInput.evaluate((el) => el === document.activeElement),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+});
+
+test("skill prompt textarea keeps focus after autosave and ui broadcast", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-prompt-focus-${suffix}`;
+  const initialPrompt = `initial-${suffix}`;
+
+  await createSkillByRequest(page, name, initialPrompt);
+  await page.goto(`/skills/${encodeURIComponent(name)}`);
+
+  const promptTa = page.locator(
+    "[data-skill-editor] textarea[name='prompt']",
+  );
+  await expect(promptTa).toBeVisible();
+  await promptTa.click();
+  await promptTa.fill(`${initialPrompt}\n\nextra line from e2e`);
+
+  await expect
+    .poll(
+      async () =>
+        promptTa.evaluate((el) => el === document.activeElement),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+});
+
+test("skill prompt textarea keeps scroll position after autosave ui broadcast", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-prompt-scroll-${suffix}`;
+  const longPrompt = Array.from({ length: 80 }, (_, i) => `line ${i}`).join("\n");
+
+  await page.addInitScript(() => {
+    const w = window as PrimeTestWindow;
+    if (w.__primeWsSendPatchedScroll) {
+      return;
+    }
+    w.__primeWsSendPatchedScroll = true;
+    w.__primeWsUpdate = 0;
+    const S = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
+      try {
+        const j = JSON.parse(String(data)) as WsClientOpField;
+        if (j.op === "update_skill") {
+          w.__primeWsUpdate = (w.__primeWsUpdate ?? 0) + 1;
+        }
+      } catch {
+        /* ignore */
+      }
+      return S.call(this, data);
+    };
+  });
+
+  await createSkillByRequest(page, name, "seed");
+  await page.goto(`/skills/${encodeURIComponent(name)}`);
+
+  const promptTa = page.locator("[data-skill-editor] textarea[name='prompt']");
+  await expect(promptTa).toBeVisible();
+  await promptTa.fill(longPrompt);
+  await promptTa.evaluate((el) => {
+    const t = el as HTMLTextAreaElement;
+    t.scrollTop = t.scrollHeight;
+  });
+  const scrollBefore = await promptTa.evaluate(
+    (el) => (el as HTMLTextAreaElement).scrollTop,
+  );
+  expect(scrollBefore).toBeGreaterThan(80);
+
+  await promptTa.type("x");
+
+  await expect
+    .poll(
+      async () =>
+        (await page.evaluate(() => {
+          const win = window as PrimeTestWindow;
+          return win.__primeWsUpdate ?? 0;
+        })) >= 1,
+      { timeout: 8000 },
+    )
+    .toBe(true);
+
+  const scrollAfter = await promptTa.evaluate(
+    (el) => (el as HTMLTextAreaElement).scrollTop,
+  );
+  expect(scrollAfter).toBeGreaterThan(scrollBefore * 0.4);
+});
+
+test("pipeline step description keeps scroll position after save ui broadcast", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const pipelineName = `e2e-pipe-scroll-${suffix}`;
+  const longDesc = Array.from({ length: 80 }, (_, i) => `step line ${i}`).join("\n");
+
+  await createPipelineByRequest(page, pipelineName);
+  const stepCreate = await wsCreateStep(page, pipelineName, `step-a-${suffix}`, "short");
+  expect(stepCreate.ok).toBe(true);
+
+  await page.goto(`/pipelines/${encodeURIComponent(pipelineName)}`);
+  const editor = page.locator("[data-testid='pipeline-step-editor']").first();
+  await expect(editor).toBeVisible();
+
+  const ta = editor.locator("textarea[name='prompt']");
+  await ta.fill(longDesc);
+  await ta.evaluate((el) => {
+    const t = el as HTMLTextAreaElement;
+    t.scrollTop = t.scrollHeight;
+  });
+  const scrollBefore = await ta.evaluate(
+    (el) => (el as HTMLTextAreaElement).scrollTop,
+  );
+  expect(scrollBefore).toBeGreaterThan(80);
+
+  await editor.locator("[data-testid='pipeline-step-save']").click();
+
+  await expect
+    .poll(
+      async () =>
+        ta.evaluate((el) => (el as HTMLTextAreaElement).scrollTop),
+      { timeout: 12_000 },
+    )
+    .toBeGreaterThan(scrollBefore * 0.4);
+});
+
+test("last viewed skill opens when clicking Skills tab after Pipeline tab", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const skillName = `e2e-last-skill-${suffix}`;
+  const pipeName = `e2e-last-skill-pipe-${suffix}`;
+
+  await createSkillByRequest(page, skillName, "p1");
+  await createPipelineByRequest(page, pipeName);
+
+  await page.goto(`/skills/${encodeURIComponent(skillName)}`);
+  await expect(page.locator(`input[name="name"][value="${skillName}"]`)).toBeVisible();
+
+  await page.getByTestId("tab-pipeline").click();
+  await expect(page).toHaveURL(new RegExp(`/pipelines/${pipeName}$`));
+
+  await page.getByTestId("tab-skills").click();
+  await expect(page).toHaveURL(new RegExp(`/skills/${skillName}$`));
+  await expect(page.locator(`input[name="name"][value="${skillName}"]`)).toBeVisible();
+});
+
+test("last viewed pipeline opens when clicking Pipeline tab after Skills tab", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const skillName = `e2e-last-pipe-sk-${suffix}`;
+  const pipeName = `e2e-last-pipe-${suffix}`;
+
+  await createSkillByRequest(page, skillName, "p1");
+  await createPipelineByRequest(page, pipeName);
+
+  await page.goto(`/pipelines/${encodeURIComponent(pipeName)}`);
+  await expect(page.locator("#pipeline-title")).toHaveText(pipeName);
+
+  await page.getByTestId("tab-skills").click();
+  await expect(page).toHaveURL(/\/skills(\/[^/]+)?$/);
+
+  await page.getByTestId("tab-pipeline").click();
+  await expect(page).toHaveURL(new RegExp(`/pipelines/${pipeName}$`));
+  await expect(page.locator("#pipeline-title")).toHaveText(pipeName);
+});
+
+test("goto /skills redirects to last viewed skill when still present", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-bare-redirect-${suffix}`;
+
+  await createSkillByRequest(page, name, "p");
+  await page.goto(`/skills/${encodeURIComponent(name)}`);
+  await expect(page.locator(`input[name="name"][value="${name}"]`)).toBeVisible();
+
+  await page.goto("/skills");
+  await expect(page).toHaveURL(new RegExp(`/skills/${encodeURIComponent(name)}$`));
+  await expect(page.locator(`input[name="name"][value="${name}"]`)).toBeVisible();
+});
+
+test("goto /skills does not redirect to deleted last skill", async ({ page }) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-stale-last-${suffix}`;
+
+  await createSkillByRequest(page, name, "p");
+  await page.goto(`/skills/${encodeURIComponent(name)}`);
+
+  const editor = page.locator("[data-skill-editor]");
+  await editor.locator("[data-testid='delete-skill-trigger']").click();
+  await expect(editor.locator("[data-testid='delete-skill-popover']")).toBeVisible();
+  await editor.locator("[data-delete-confirm]").click();
+  await expect(page).toHaveURL(/\/skills$/);
+
+  await page.goto("/skills");
+  await expect(page).toHaveURL(/\/skills$/);
+  await expect(page.getByTestId("skill-nav-link").filter({ hasText: name })).toHaveCount(
+    0,
+  );
+});
+
+test("create pipeline happy path from left nav plus button", async ({ page, e2eDataDir }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-pipeline-${suffix}`;
 
@@ -121,6 +347,47 @@ test("create pipeline happy path from left nav plus button", async ({ page }) =>
   await expect(page).toHaveURL(new RegExp(`/pipelines/[a-z0-9-]+$`));
   await expect(page.locator("#pipeline-title")).toHaveText(name);
   await expect(page.getByTestId("pipeline-nav-link").filter({ hasText: name })).toBeVisible();
+
+  const pj = path.join(e2eDataDir, "pipelines", name, "pipeline.json");
+  await expect.poll(() => fs.existsSync(pj)).toBe(true);
+});
+
+test("create pipeline from UI shows error and keeps modal open when name is invalid", async ({
+  page,
+}) => {
+  await page.goto("/pipelines");
+  await page.getByTestId("pipeline-create-open").click();
+  await page.locator("dialog#pipeline-modal input[name='name']").fill("bad name");
+  await page.locator("dialog#pipeline-modal button[type='submit']").click();
+
+  await expect(page).toHaveURL(/\/pipelines$/);
+  await expect(page.locator("dialog#pipeline-modal")).toBeVisible();
+  await expect(page.getByTestId("pipeline-create-error")).toBeVisible();
+  await expect(page.getByTestId("pipeline-create-error")).toContainText(
+    /name must contain only lowercase letters, digits, and dashes/,
+  );
+});
+
+test("create pipeline from UI shows error and keeps modal open when name is duplicate", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-dup-${suffix}`;
+
+  await page.goto("/pipelines");
+  await page.getByTestId("pipeline-create-open").click();
+  await page.locator("dialog#pipeline-modal input[name='name']").fill(name);
+  await page.locator("dialog#pipeline-modal button[type='submit']").click();
+  await expect(page).toHaveURL(new RegExp(`/pipelines/${name}$`));
+
+  await page.getByTestId("pipeline-create-open").click();
+  await page.locator("dialog#pipeline-modal input[name='name']").fill(name);
+  await page.locator("dialog#pipeline-modal button[type='submit']").click();
+
+  await expect(page.locator("dialog#pipeline-modal")).toBeVisible();
+  await expect(page.getByTestId("pipeline-create-error")).toBeVisible();
+  await expect(page.getByTestId("pipeline-create-error")).toContainText(/pipeline exists/);
+  await expect(page.getByTestId("pipeline-nav-link").filter({ hasText: name })).toHaveCount(1);
 });
 
 test("pipeline name input lowercases in real time and persists lowercase", async ({ page }) => {
@@ -251,7 +518,7 @@ test("autosave update happy path persists edits while typing", async ({ page }) 
     w.__primeWsSendPatched = true;
     w.__primeWsUpdate = 0;
     const S = WebSocket.prototype.send;
-    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    WebSocket.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
       try {
         const j = JSON.parse(String(data)) as WsClientOpField;
         if (j.op === "update_skill") {
@@ -308,7 +575,7 @@ test("skill autosave requests are at least one second apart", async ({ page }) =
     w.__primeWsSendPatchedInterval = true;
     w.__primeWsUpdateTimes = [];
     const S = WebSocket.prototype.send;
-    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    WebSocket.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
       try {
         const j = JSON.parse(String(data)) as WsClientOpField;
         if (j.op === "update_skill") {
@@ -523,7 +790,7 @@ test("autosave retries after one second when backend fails once", async ({ page 
   await page.addInitScript(() => {
     const Orig = WebSocket.prototype.send;
     let dropped = 0;
-    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    WebSocket.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
       if (typeof data === "string" && data.includes('"op":"update_skill"')) {
         const win = window as PrimeTestWindow;
         win.__primeUpdateSkillSends = win.__primeUpdateSkillSends ?? [];
@@ -572,7 +839,7 @@ test("autosave retries on next interval after failure without extra keypress", a
   await page.addInitScript(() => {
     const Orig = WebSocket.prototype.send;
     let dropped = 0;
-    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    WebSocket.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
       if (typeof data === "string" && data.includes('"op":"update_skill"')) {
         const win = window as PrimeTestWindow;
         win.__primeUpdateSkillSends = win.__primeUpdateSkillSends ?? [];

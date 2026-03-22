@@ -63,6 +63,439 @@
         document.getElementById("prime-generations")
       );
 
+      const PRIME_LAST_SKILL_KEY = "prime.lastSkillName";
+      const PRIME_LAST_PIPELINE_KEY = "prime.lastPipelineName";
+
+      function persistLastViewedFromLocation() {
+        try {
+          const path = location.pathname;
+          const sm = path.match(/^\/skills\/([^/]+)\/?$/);
+          if (sm) {
+            localStorage.setItem(PRIME_LAST_SKILL_KEY, decodeURIComponent(sm[1]));
+          }
+          const pm = path.match(/^\/pipelines\/([^/]+)/);
+          if (pm) {
+            localStorage.setItem(
+              PRIME_LAST_PIPELINE_KEY,
+              decodeURIComponent(pm[1])
+            );
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+
+      function syncLastViewedFromUi(data) {
+        if (!data) {
+          return;
+        }
+        try {
+          if (data.selected_skill && data.selected_skill.name) {
+            localStorage.setItem(PRIME_LAST_SKILL_KEY, data.selected_skill.name);
+          }
+          if (data.selected_pipeline && data.selected_pipeline.name) {
+            localStorage.setItem(
+              PRIME_LAST_PIPELINE_KEY,
+              data.selected_pipeline.name
+            );
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+
+      function findNavLinkHrefForSkill(name) {
+        const encoded = encodeURIComponent(name);
+        const expected = "/skills/" + encoded;
+        const list = document.getElementById("skills-nav-list");
+        if (!list) {
+          return null;
+        }
+        for (const a of list.querySelectorAll("a[href]")) {
+          if (a.getAttribute("href") === expected) {
+            return expected;
+          }
+        }
+        return null;
+      }
+
+      function findNavLinkHrefForPipeline(name) {
+        const encoded = encodeURIComponent(name);
+        const expected = "/pipelines/" + encoded;
+        const list = document.getElementById("pipeline-nav-list");
+        if (!list) {
+          return null;
+        }
+        for (const a of list.querySelectorAll("a[href]")) {
+          if (a.getAttribute("href") === expected) {
+            return expected;
+          }
+        }
+        return null;
+      }
+
+      function maybeRedirectBareSectionUrl() {
+        try {
+          const path = location.pathname;
+          if (path === "/skills") {
+            const raw = localStorage.getItem(PRIME_LAST_SKILL_KEY);
+            if (!raw) {
+              return;
+            }
+            const href = findNavLinkHrefForSkill(raw);
+            if (!href) {
+              localStorage.removeItem(PRIME_LAST_SKILL_KEY);
+              return;
+            }
+            location.replace(href + location.search + location.hash);
+            return;
+          }
+          if (path === "/pipelines") {
+            const raw = localStorage.getItem(PRIME_LAST_PIPELINE_KEY);
+            if (!raw) {
+              return;
+            }
+            const href = findNavLinkHrefForPipeline(raw);
+            if (!href) {
+              localStorage.removeItem(PRIME_LAST_PIPELINE_KEY);
+              return;
+            }
+            location.replace(href + location.search + location.hash);
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+
+      function findSkillEditorRoot(skillId) {
+        if (!skillId) {
+          return document.querySelector("[data-skill-editor]");
+        }
+        for (const ed of document.querySelectorAll("[data-skill-editor]")) {
+          if (ed.getAttribute("data-skill-id") === skillId) {
+            return ed;
+          }
+        }
+        return document.querySelector("[data-skill-editor]");
+      }
+
+      function findUpdateStepForm(pipeline, stepId) {
+        const want = String(stepId);
+        for (const f of document.querySelectorAll(
+          "form[data-ws-form='update_step']"
+        )) {
+          if (
+            f.getAttribute("data-pipeline") === pipeline &&
+            f.getAttribute("data-step-id") === want
+          ) {
+            return f;
+          }
+        }
+        return null;
+      }
+
+      function captureShellScrollState() {
+        const nav = document.getElementById("left-nav");
+        const main = document.getElementById("main-content");
+        return {
+          windowScrollX: window.scrollX,
+          windowScrollY: window.scrollY,
+          navScrollTop: nav ? nav.scrollTop : 0,
+          navScrollLeft: nav ? nav.scrollLeft : 0,
+          mainScrollTop: main ? main.scrollTop : 0,
+          mainScrollLeft: main ? main.scrollLeft : 0
+        };
+      }
+
+      function restoreShellScrollState(shell) {
+        if (!shell) {
+          return;
+        }
+        window.scrollTo(shell.windowScrollX, shell.windowScrollY);
+        const nav = document.getElementById("left-nav");
+        const main = document.getElementById("main-content");
+        if (nav) {
+          nav.scrollTop = shell.navScrollTop;
+          nav.scrollLeft = shell.navScrollLeft;
+        }
+        if (main) {
+          main.scrollTop = shell.mainScrollTop;
+          main.scrollLeft = shell.mainScrollLeft;
+        }
+      }
+
+      function primeFocusNoScroll(el) {
+        if (!el || typeof el.focus !== "function") {
+          return;
+        }
+        try {
+          el.focus({ preventScroll: true });
+        } catch (_e) {
+          el.focus();
+        }
+      }
+
+      function captureSkillEditorFocusState() {
+        const ae = document.activeElement;
+        if (!ae || !ae.matches || !ae.closest("[data-skill-editor]")) {
+          return null;
+        }
+        const editor = ae.closest("[data-skill-editor]");
+        const skillId = editor ? editor.getAttribute("data-skill-id") || "" : "";
+        let start = 0;
+        let end = 0;
+        if (
+          ae.matches("input[name='name']") &&
+          ae instanceof HTMLInputElement
+        ) {
+          if (typeof ae.selectionStart === "number") {
+            start = ae.selectionStart;
+          }
+          if (typeof ae.selectionEnd === "number") {
+            end = ae.selectionEnd;
+          }
+          return {
+            kind: "skillName",
+            skillId: skillId,
+            selectionStart: start,
+            selectionEnd: end
+          };
+        }
+        if (
+          ae.matches("textarea[name='prompt']") &&
+          ae instanceof HTMLTextAreaElement
+        ) {
+          if (typeof ae.selectionStart === "number") {
+            start = ae.selectionStart;
+          }
+          if (typeof ae.selectionEnd === "number") {
+            end = ae.selectionEnd;
+          }
+          return {
+            kind: "skillPrompt",
+            skillId: skillId,
+            selectionStart: start,
+            selectionEnd: end,
+            scrollTop: ae.scrollTop,
+            scrollLeft: ae.scrollLeft
+          };
+        }
+        return null;
+      }
+
+      function restoreSkillEditorFocusState(state) {
+        if (!state || (state.kind !== "skillName" && state.kind !== "skillPrompt")) {
+          return;
+        }
+        const root = findSkillEditorRoot(state.skillId || "");
+        if (!root) {
+          return;
+        }
+        const sel =
+          state.kind === "skillName"
+            ? "input[name='name']"
+            : "textarea[name='prompt']";
+        const el = root.querySelector(sel);
+        if (
+          !el ||
+          (!(el instanceof HTMLInputElement) &&
+            !(el instanceof HTMLTextAreaElement))
+        ) {
+          return;
+        }
+        primeFocusNoScroll(el);
+        try {
+          if (
+            typeof state.selectionStart === "number" &&
+            typeof state.selectionEnd === "number"
+          ) {
+            el.setSelectionRange(state.selectionStart, state.selectionEnd);
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+        if (
+          state.kind === "skillPrompt" &&
+          el instanceof HTMLTextAreaElement
+        ) {
+          if (typeof state.scrollTop === "number") {
+            el.scrollTop = state.scrollTop;
+          }
+          if (typeof state.scrollLeft === "number") {
+            el.scrollLeft = state.scrollLeft;
+          }
+        }
+      }
+
+      function capturePipelineStepEditorFocusState() {
+        const ae = document.activeElement;
+        if (!ae || !ae.matches || !ae.closest("[data-testid='pipeline-step-editor']")) {
+          return null;
+        }
+        const article = ae.closest("[data-testid='pipeline-step-editor']");
+        const form =
+          article && article.querySelector("form[data-ws-form='update_step']");
+        if (!form) {
+          return null;
+        }
+        const pipeline = form.getAttribute("data-pipeline") || "";
+        const stepId = form.getAttribute("data-step-id") || "";
+        let start = 0;
+        let end = 0;
+        if (ae.matches("input[name='title']") && ae instanceof HTMLInputElement) {
+          if (typeof ae.selectionStart === "number") {
+            start = ae.selectionStart;
+          }
+          if (typeof ae.selectionEnd === "number") {
+            end = ae.selectionEnd;
+          }
+          return {
+            kind: "pipelineTitle",
+            pipeline: pipeline,
+            stepId: stepId,
+            selectionStart: start,
+            selectionEnd: end
+          };
+        }
+        if (
+          ae.matches("textarea[name='prompt']") &&
+          ae instanceof HTMLTextAreaElement
+        ) {
+          if (typeof ae.selectionStart === "number") {
+            start = ae.selectionStart;
+          }
+          if (typeof ae.selectionEnd === "number") {
+            end = ae.selectionEnd;
+          }
+          return {
+            kind: "pipelinePrompt",
+            pipeline: pipeline,
+            stepId: stepId,
+            selectionStart: start,
+            selectionEnd: end,
+            scrollTop: ae.scrollTop,
+            scrollLeft: ae.scrollLeft
+          };
+        }
+        return null;
+      }
+
+      function restorePipelineStepEditorFocusState(state) {
+        if (
+          !state ||
+          (state.kind !== "pipelineTitle" && state.kind !== "pipelinePrompt")
+        ) {
+          return;
+        }
+        const form = findUpdateStepForm(state.pipeline, state.stepId);
+        if (!form) {
+          return;
+        }
+        const sel =
+          state.kind === "pipelineTitle"
+            ? "input[name='title']"
+            : "textarea[name='prompt']";
+        const el = form.querySelector(sel);
+        if (
+          !el ||
+          (!(el instanceof HTMLInputElement) &&
+            !(el instanceof HTMLTextAreaElement))
+        ) {
+          return;
+        }
+        primeFocusNoScroll(el);
+        try {
+          if (
+            typeof state.selectionStart === "number" &&
+            typeof state.selectionEnd === "number"
+          ) {
+            el.setSelectionRange(state.selectionStart, state.selectionEnd);
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+        if (
+          state.kind === "pipelinePrompt" &&
+          el instanceof HTMLTextAreaElement
+        ) {
+          if (typeof state.scrollTop === "number") {
+            el.scrollTop = state.scrollTop;
+          }
+          if (typeof state.scrollLeft === "number") {
+            el.scrollLeft = state.scrollLeft;
+          }
+        }
+      }
+
+      function wireTabLastViewed() {
+        if (window.__primeTabLastViewedWired) {
+          return;
+        }
+        window.__primeTabLastViewedWired = true;
+        document.addEventListener(
+          "click",
+          (ev) => {
+            const t = ev.target;
+            if (!(t instanceof Element)) {
+              return;
+            }
+            if (
+              ev.button !== 0 ||
+              ev.ctrlKey ||
+              ev.metaKey ||
+              ev.shiftKey ||
+              ev.altKey
+            ) {
+              return;
+            }
+            const skillsTab = t.closest("#tab-skills");
+            if (skillsTab && skillsTab.getAttribute("href") === "/skills") {
+              const raw = localStorage.getItem(PRIME_LAST_SKILL_KEY);
+              if (!raw) {
+                return;
+              }
+              const href = findNavLinkHrefForSkill(raw);
+              if (!href) {
+                try {
+                  localStorage.removeItem(PRIME_LAST_SKILL_KEY);
+                } catch (_e) {
+                  /* ignore */
+                }
+                return;
+              }
+              if (new URL(href, location.origin).pathname === location.pathname) {
+                return;
+              }
+              ev.preventDefault();
+              location.assign(href + location.search + location.hash);
+              return;
+            }
+            const pipeTab = t.closest("#tab-pipeline");
+            if (pipeTab && pipeTab.getAttribute("href") === "/pipelines") {
+              const raw = localStorage.getItem(PRIME_LAST_PIPELINE_KEY);
+              if (!raw) {
+                return;
+              }
+              const href = findNavLinkHrefForPipeline(raw);
+              if (!href) {
+                try {
+                  localStorage.removeItem(PRIME_LAST_PIPELINE_KEY);
+                } catch (_e) {
+                  /* ignore */
+                }
+                return;
+              }
+              if (new URL(href, location.origin).pathname === location.pathname) {
+                return;
+              }
+              ev.preventDefault();
+              location.assign(href + location.search + location.hash);
+            }
+          },
+          true
+        );
+      }
+
       function nextMsgId() {
         if (typeof crypto !== "undefined" && crypto.randomUUID) {
           return crypto.randomUUID();
@@ -147,7 +580,7 @@
         o +=
           '        </section>\n\n        <section id="pipeline-nav-panel" data-tab-panel="pipeline"' +
           primeHiddenAttr(a, "pipelines") +
-          ">\n          <h2 style=\"margin-top:0;\">Pipeline</h2>\n          <button\n            type=\"button\"\n            data-testid=\"pipeline-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('pipeline-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"pipeline-modal\">\n            <form data-ws-form=\"create_pipeline\">\n              <h3>Create Pipeline</h3>\n              <label>Name<br><input name=\"name\" data-lowercase-field=\"pipeline-name\" required></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('pipeline-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n";
+          ">\n          <h2 style=\"margin-top:0;\">Pipeline</h2>\n          <button\n            type=\"button\"\n            data-testid=\"pipeline-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('pipeline-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"pipeline-modal\">\n            <form data-ws-form=\"create_pipeline\">\n              <h3>Create Pipeline</h3>\n              <p data-testid=\"pipeline-create-error\" role=\"alert\" style=\"color:#b91c1c;margin:0.5rem 0;\" hidden></p>\n              <label>Name<br><input name=\"name\" data-lowercase-field=\"pipeline-name\" required></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('pipeline-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n";
         if (pipelines.length > 0) {
           o +=
             '          <ul id="pipeline-nav-list" style="padding-left:0;margin-top:1rem;">\n';
@@ -310,6 +743,10 @@
       }
 
       function applyUiBroadcast(data) {
+        const shellScroll = captureShellScrollState();
+        const skillFocus = captureSkillEditorFocusState();
+        const pipelineFocus = capturePipelineStepEditorFocusState();
+        syncLastViewedFromUi(data);
         const nav = document.getElementById("left-nav");
         const main = document.getElementById("main-content");
         const hasView =
@@ -327,10 +764,16 @@
           history.replaceState(null, "", data.push_url);
         }
         wireAll();
+        restoreShellScrollState(shellScroll);
+        restoreSkillEditorFocusState(skillFocus);
+        restorePipelineStepEditorFocusState(pipelineFocus);
       }
 
       async function applyFsRefresh() {
         try {
+          const shellScroll = captureShellScrollState();
+          const skillFocus = captureSkillEditorFocusState();
+          const pipelineFocus = capturePipelineStepEditorFocusState();
           const r = await fetch(location.href, {
             cache: "no-store",
             headers: { Accept: "text/html" },
@@ -352,6 +795,9 @@
             tMain.innerHTML = main.innerHTML;
           }
           wireAll();
+          restoreShellScrollState(shellScroll);
+          restoreSkillEditorFocusState(skillFocus);
+          restorePipelineStepEditorFocusState(pipelineFocus);
         } catch (_e) {
           /* ignore */
         }
@@ -384,7 +830,9 @@
           return;
         }
         if (Object.prototype.hasOwnProperty.call(data, "ok") && data.id) {
-          finishSkillAutosavePending(data.id, data.ok === true);
+          if (!finishPipelineCreatePending(data.id, data.ok === true, data.error)) {
+            finishSkillAutosavePending(data.id, data.ok === true);
+          }
           /* UI sync comes from broadcast */
         }
       }
@@ -447,6 +895,42 @@
         if (ok) {
           st.lastSentPayload = pending.payload;
         }
+      }
+
+      function primePipelineCreatePendingSet() {
+        if (!window.__primePipelineCreatePending) {
+          window.__primePipelineCreatePending = new Set();
+        }
+        return window.__primePipelineCreatePending;
+      }
+
+      function setPipelineCreateError(msg) {
+        const el = document.querySelector("[data-testid='pipeline-create-error']");
+        if (!el) {
+          return;
+        }
+        if (msg == null || msg === "") {
+          el.textContent = "";
+          el.hidden = true;
+        } else {
+          el.textContent = msg;
+          el.hidden = false;
+        }
+      }
+
+      function finishPipelineCreatePending(msgId, ok, err) {
+        const set = primePipelineCreatePendingSet();
+        if (!set.has(msgId)) {
+          return false;
+        }
+        set.delete(msgId);
+        if (ok) {
+          document.getElementById("pipeline-modal")?.close();
+          setPipelineCreateError(null);
+        } else {
+          setPipelineCreateError(err != null ? String(err) : "Failed");
+        }
+        return true;
       }
 
       function saveEditor(editor) {
@@ -690,12 +1174,13 @@
           }
           if (ws === "create_pipeline") {
             const fd = new FormData(form);
+            setPipelineCreateError(null);
+            primePipelineCreatePendingSet().add(id);
             sendPrime({
               op: "create_pipeline",
               id: id,
               name: String(fd.get("name") || "")
             });
-            form.closest("dialog")?.close();
             return;
           }
           if (ws === "create_step") {
@@ -788,13 +1273,33 @@
         }
       }
 
+      function wirePipelineCreateOpenClear() {
+        if (window.__primePipelineCreateOpenClear) {
+          return;
+        }
+        window.__primePipelineCreateOpenClear = true;
+        document.addEventListener("click", (event) => {
+          const t = event.target;
+          if (!(t instanceof Element)) {
+            return;
+          }
+          if (t.closest("[data-testid='pipeline-create-open']")) {
+            setPipelineCreateError(null);
+          }
+        });
+      }
+
       function wireAll() {
         wireLowercaseInputs();
         wireAutosave();
         wireDeleteConfirmations();
         wirePipelineStepReorder();
+        wirePipelineCreateOpenClear();
         wireWsFormsOnce();
       }
 
+      persistLastViewedFromLocation();
+      maybeRedirectBareSectionUrl();
       connectPrimeWs();
       wireAll();
+      wireTabLastViewed();

@@ -2,7 +2,7 @@
   "name": "prime-agent-website-tests",
   "private": true,
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "test:e2e": "playwright test",
     "test:e2e:live": "playwright test -c playwright.live.config.ts",
     "test:e2e:headed": "playwright test --headed",
@@ -12,6 +12,7 @@
   "devDependencies": {
     "@playwright/test": "^1.54.2",
     "@types/node": "^22.13.5",
+    "@typescript/native-preview": "^7.0.0-dev.20260322.1",
     "typescript": "^5.7.3"
   }
 }
