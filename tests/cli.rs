@@ -698,6 +698,101 @@ fn sync_remote_commits_and_pulls() {
     cmd.assert().success();
 }
 
+#[test]
+fn get_errors_when_no_skills_provided() {
+    let temp = TempDir::new().expect("temp dir");
+    let skills_dir = temp.path().join("skills");
+    write_config(&temp, &skills_dir);
+    fs::create_dir_all(&skills_dir).expect("skills dir");
+
+    let mut cmd = cmd_with_skills_dir(&temp, &skills_dir);
+    cmd.arg("get");
+    cmd.assert()
+        .failure()
+        .stderr(contains("no skills provided"));
+}
+
+#[test]
+fn local_marks_out_of_sync_remote_when_skill_missing_on_disk() {
+    let temp = TempDir::new().expect("temp dir");
+    let skills_dir = temp.path().join("skills");
+    write_config(&temp, &skills_dir);
+    fs::create_dir_all(&skills_dir).expect("skills dir");
+
+    let agents = [
+        "<!-- prime-agent(Start alpha) -->",
+        "## alpha",
+        "Only in agents",
+        "<!-- prime-agent(End alpha) -->",
+        "",
+    ]
+    .join("\n");
+    fs::write(default_agents_path(&temp), agents).expect("agents");
+
+    let mut cmd = cmd_with_skills_dir(&temp, &skills_dir);
+    cmd.arg("local");
+    cmd.assert()
+        .success()
+        .stdout(contains("alpha (out of sync: remote)\n"));
+}
+
+#[test]
+fn sync_without_agents_md_commits_skills_repo_when_dirty() {
+    let temp = TempDir::new().expect("temp dir");
+    let skills_dir = temp.path().join("skills");
+    write_config(&temp, &skills_dir);
+    fs::create_dir_all(skills_dir.join("alpha")).expect("alpha dir");
+    fs::write(skills_dir.join("alpha/SKILL.md"), "Orphan skill\n").expect("skill");
+
+    run_git(&skills_dir, &["init"]);
+    run_git(&skills_dir, &["config", "user.email", "test@example.com"]);
+    run_git(&skills_dir, &["config", "user.name", "Test"]);
+    run_git(&skills_dir, &["add", "-A"]);
+    run_git(&skills_dir, &["commit", "-m", "Initial"]);
+
+    assert!(!default_agents_path(&temp).exists());
+
+    fs::write(skills_dir.join("alpha/SKILL.md"), "Dirty working tree\n").expect("skill");
+
+    let mut cmd = cmd_with_skills_dir(&temp, &skills_dir);
+    cmd.arg("sync");
+    cmd.assert().success();
+
+    assert!(!default_agents_path(&temp).exists());
+
+    let count = git_output(&skills_dir, &["rev-list", "--count", "HEAD"]);
+    assert_eq!(count.trim(), "2");
+}
+
+#[test]
+fn sync_resolves_multi_hunk_conflict_via_stdin() {
+    let temp = TempDir::new().expect("temp dir");
+    let skills_dir = temp.path().join("skills");
+    write_config(&temp, &skills_dir);
+    fs::create_dir_all(skills_dir.join("alpha")).expect("alpha dir");
+    let middle = (2..20).map(|i| format!("m{i}")).collect::<Vec<_>>().join("\n");
+    let skill_body = format!("L1\n{middle}\nL20\n");
+    fs::write(skills_dir.join("alpha/SKILL.md"), &skill_body).expect("skill");
+    let agents_body = format!("ONE\n{middle}\nTWENTY\n");
+    let agents = format!(
+        "<!-- prime-agent(Start alpha) -->\n## alpha\n{agents_body}<!-- prime-agent(End alpha) -->\n\n",
+    );
+    fs::write(default_agents_path(&temp), agents).expect("agents");
+
+    let mut cmd = cmd_with_skills_dir(&temp, &skills_dir);
+    cmd.arg("sync").write_stdin("s\na\n");
+    cmd.assert().success();
+
+    let skill = fs::read_to_string(skills_dir.join("alpha/SKILL.md")).expect("skill");
+    assert!(skill.starts_with("L1\n"));
+    assert!(skill.contains("TWENTY"));
+    assert!(!skill.contains("ONE"));
+
+    let updated = fs::read_to_string(default_agents_path(&temp)).expect("agents");
+    assert!(updated.contains("L1\n"));
+    assert!(updated.contains("TWENTY"));
+}
+
 fn write_dot_prime_agent_config(temp: &TempDir, model: &str, clirunner: &str) {
     let d = temp.path().join(".prime-agent");
     fs::create_dir_all(&d).expect("dot dir");

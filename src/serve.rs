@@ -6,9 +6,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::net::TcpListener;
 
+use std::sync::Arc;
+
+use crate::generation::new_registry_mutex;
+use crate::idle_commit::{spawn_idle_commit_task, SkillActivity};
 use crate::pipeline_store::PipelineStore;
 use crate::skills_store::SkillsStore;
-use crate::web::handlers::{build_router, AppState};
+use crate::web::handlers::{broadcast_fs_changed, build_router, AppState};
 
 pub fn run_blocking(data_dir: PathBuf, bind: String) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("tokio runtime")?;
@@ -20,17 +24,38 @@ async fn run(data_dir: PathBuf, bind: String) -> Result<()> {
     fs::create_dir_all(&data_dir).with_context(|| format!("create '{}'", data_dir.display()))?;
     let skills_dir = data_dir.join("skills");
     fs::create_dir_all(&skills_dir)?;
+    fs::create_dir_all(data_dir.join("pipelines"))?;
     let skills = SkillsStore::new(skills_dir);
     let pipelines = PipelineStore::new(&data_dir);
     let counter_path = data_dir.join("counter.json");
 
     let static_root = std::env::current_dir().context("current_dir for static files")?;
 
+    let skill_activity = Arc::new(SkillActivity::new());
+    let live_reload_enabled = crate::live_reload::live_reload_enabled_from_env();
+    let live_tx = crate::live_reload::live_broadcast_channel();
+    let fs_suppress = crate::live_reload::FsSuppress::default();
+    let generations = new_registry_mutex(&skills, &pipelines)?;
     let state = AppState {
+        data_dir: data_dir.clone(),
         skills,
         pipelines,
         counter_path,
+        skill_activity: Arc::clone(&skill_activity),
+        live_reload_enabled,
+        live_tx,
+        fs_suppress,
+        generations,
     };
+    if live_reload_enabled {
+        let s = state.clone();
+        let fs_suppress_for_watcher = s.fs_suppress.clone();
+        crate::live_reload::spawn_fs_watcher(data_dir.clone(), &fs_suppress_for_watcher, move || {
+            let _ = broadcast_fs_changed(&s);
+        });
+    }
+
+    spawn_idle_commit_task(data_dir.clone(), skill_activity);
 
     let app = build_router(state, static_root);
 

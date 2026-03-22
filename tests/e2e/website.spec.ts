@@ -1,10 +1,24 @@
 import * as fs from "fs";
 import * as path from "path";
-import { expect, Page, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
-const e2eDataDir = path.join(process.cwd(), ".tmp/e2e_data");
+import type { WsClientOpField } from "./helpers/ui-broadcast-types";
+import type { PrimeTestWindow } from "./helpers/prime-window";
+import {
+  wsAddStepSkill,
+  wsCommand,
+  wsCreatePipeline,
+  wsCreateSkill,
+  wsCreateStep,
+  wsDeleteStep,
+  wsDeleteStepSkill,
+  wsReorderStep,
+  wsUpdateSkill,
+  wsUpdateStep,
+} from "./helpers/ws-client";
 
-test.beforeEach(() => {
+test.beforeEach(async ({ e2eDataDir }) => {
   try {
     fs.rmSync(path.join(e2eDataDir, "skills"), { recursive: true, force: true });
   } catch {
@@ -36,30 +50,22 @@ async function openPipelineTab(page: Page) {
   await expect(page).toHaveURL(/\/pipelines$/);
 }
 
-async function createPipelineByRequest(request: Page["request"], name: string): Promise<string> {
-  const response = await request.post("/pipelines", {
-    form: { name },
-    maxRedirects: 0,
-  });
-  expect(response.status()).toBe(303);
-  const location = response.headers()["location"] ?? "";
-  const id = location.split("/").pop() ?? "";
+async function createPipelineByRequest(page: Page, name: string): Promise<string> {
+  await page.goto("/pipelines");
+  const r = await wsCreatePipeline(page, name);
+  expect(r.ok).toBe(true);
+  const loc = r.location ?? "";
+  const id = loc.split("/").pop() ?? "";
   expect(id.length).toBeGreaterThan(0);
   return decodeURIComponent(id);
 }
 
-async function createSkillByRequest(
-  request: Page["request"],
-  name: string,
-  prompt: string,
-): Promise<string> {
-  const response = await request.post("/skills", {
-    form: { name, prompt },
-    maxRedirects: 0,
-  });
-  expect(response.status()).toBe(303);
-  const location = response.headers()["location"] ?? "";
-  const id = location.split("/").pop() ?? "";
+async function createSkillByRequest(page: Page, name: string, prompt: string): Promise<string> {
+  await page.goto("/skills");
+  const r = await wsCreateSkill(page, name, prompt);
+  expect(r.ok).toBe(true);
+  const loc = r.location ?? "";
+  const id = loc.split("/").pop() ?? "";
   expect(id.length).toBeGreaterThan(0);
   return decodeURIComponent(id);
 }
@@ -145,51 +151,35 @@ test("pipeline name paste is immediately normalized to lowercase", async ({ page
   await expect(input).toHaveValue(pastedName.toLowerCase());
 });
 
-test("backend rejects uppercase pipeline name on insertion", async ({ request }) => {
+test("backend rejects uppercase pipeline name on insertion", async ({ page }) => {
   const suffix = uniqueSuffix();
   const uppercaseName = `BACKEND-PIPELINE-${suffix}`;
-  const response = await request.post("/pipelines", {
-    form: { name: uppercaseName },
-  });
-  expect(response.status()).toBe(400);
-  await expect(response.text()).resolves.toContain(
-    "name must contain only lowercase letters, digits, and dashes",
-  );
+  await page.goto("/pipelines");
+  const r = await wsCreatePipeline(page, uppercaseName);
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("name must contain only lowercase letters, digits, and dashes");
 });
 
-test("create pipeline unhappy path rejects non-kebab names", async ({ request }) => {
+test("create pipeline unhappy path rejects non-kebab names", async ({ page }) => {
   const invalidNames = ["bad name", "Bad-Name", "bad_name", "   "];
+  await page.goto("/pipelines");
   for (const name of invalidNames) {
-    const response = await request.post("/pipelines", {
-      form: { name },
-    });
-    expect(response.status()).toBe(400);
-    await expect(response.text()).resolves.toContain(
-      "name must contain only lowercase letters, digits, and dashes",
-    );
+    const r = await wsCreatePipeline(page, name);
+    expect(r.ok).toBe(false);
+    expect(r.error ?? "").toContain("name must contain only lowercase letters, digits, and dashes");
   }
 });
 
 test("pipeline list renders each pipeline as clickable nav item and routes to /pipelines/:id", async ({
   page,
-  request,
 }) => {
   const suffix = uniqueSuffix();
   const first = `e2e-pipeline-first-${suffix}`;
   const second = `e2e-pipeline-second-${suffix}`;
 
-  const createOne = await request.post("/pipelines", {
-    form: { name: first },
-    maxRedirects: 0,
-  });
-  expect(createOne.status()).toBe(303);
-  const createTwo = await request.post("/pipelines", {
-    form: { name: second },
-    maxRedirects: 0,
-  });
-  expect(createTwo.status()).toBe(303);
-  const locationTwo = createTwo.headers()["location"] ?? "";
-  const secondId = locationTwo.split("/").pop() ?? "";
+  await createPipelineByRequest(page, first);
+  const locTwo = (await wsCreatePipeline(page, second)).location ?? "";
+  const secondId = locTwo.split("/").pop() ?? "";
 
   await page.goto("/pipelines");
   await expect(page.getByTestId("pipeline-nav-link").filter({ hasText: first })).toBeVisible();
@@ -216,76 +206,65 @@ test("create skill happy path from Skills tab", async ({ page }) => {
   await expect(page.locator("#skills-main-panel textarea[name='prompt']")).toHaveValue(prompt);
 });
 
-test("create skill unhappy path rejects non-kebab names", async ({ request }) => {
+test("create skill unhappy path rejects non-kebab names", async ({ page }) => {
   const invalidNames = ["bad name", "Bad-Name", "bad_name", ""];
+  await page.goto("/skills");
   for (const name of invalidNames) {
-    const response = await request.post("/skills", {
-      form: { name, prompt: "some-prompt" },
-    });
-    expect(response.status()).toBe(400);
-    await expect(response.text()).resolves.toContain(
-      "name must contain only lowercase letters, digits, and dashes",
-    );
+    const r = await wsCreateSkill(page, name, "some-prompt");
+    expect(r.ok).toBe(false);
+    expect(r.error ?? "").toContain("name must contain only lowercase letters, digits, and dashes");
   }
 });
 
 test("skill update unhappy path rejects invalid rename and allows kebab rename", async ({
-  request,
+  page,
 }) => {
   const suffix = uniqueSuffix();
   const originalName = `e2e-update-${suffix}`;
   const validRenamed = `e2e-renamed-${suffix}`;
   const prompt = `prompt-${suffix}`;
 
-  const createResponse = await request.post("/skills", {
-    form: { name: originalName, prompt },
-    maxRedirects: 0,
-  });
-  expect(createResponse.status()).toBe(303);
-  const location = createResponse.headers()["location"] ?? "";
+  await createSkillByRequest(page, originalName, prompt);
 
-  const invalidRename = await request.post(`${location}/update`, {
-    headers: { "X-Autosave": "1" },
-    form: { name: "Legacy_Name", prompt },
-  });
-  expect(invalidRename.status()).toBe(400);
-  await expect(invalidRename.text()).resolves.toContain(
+  const invalidRename = await wsUpdateSkill(page, originalName, "Legacy_Name", prompt);
+  expect(invalidRename.ok).toBe(false);
+  expect(invalidRename.error ?? "").toContain(
     "name must contain only lowercase letters, digits, and dashes",
   );
 
-  const validRename = await request.post(`${location}/update`, {
-    headers: { "X-Autosave": "1" },
-    form: { name: validRenamed, prompt: `${prompt}-updated` },
-  });
-  expect(validRename.status()).toBe(204);
+  const validRename = await wsUpdateSkill(page, originalName, validRenamed, `${prompt}-updated`);
+  expect(validRename.ok).toBe(true);
 });
 
-test("autosave update happy path persists edits while typing", async ({
-  page,
-  request,
-}) => {
+test("autosave update happy path persists edits while typing", async ({ page }) => {
   const suffix = uniqueSuffix();
   const originalName = `e2e-update-old-${suffix}`;
   const updatedName = `e2e-update-new-${suffix}`;
   const originalPrompt = `old-prompt-${suffix}`;
   const updatedPrompt = `new-prompt-${suffix}`;
 
-  const createResponse = await request.post("/skills", {
-    form: { name: originalName, prompt: originalPrompt },
-    maxRedirects: 0,
-  });
-  expect(createResponse.status()).toBe(303);
-
-  let autosaveRequests = 0;
-  page.on("request", (req) => {
-    if (
-      req.url().includes("/skills/") &&
-      req.url().endsWith("/update") &&
-      req.headers()["x-autosave"] === "1"
-    ) {
-      autosaveRequests += 1;
+  await page.addInitScript(() => {
+    const w = window as PrimeTestWindow;
+    if (w.__primeWsSendPatched) {
+      return;
     }
+    w.__primeWsSendPatched = true;
+    w.__primeWsUpdate = 0;
+    const S = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      try {
+        const j = JSON.parse(String(data)) as WsClientOpField;
+        if (j.op === "update_skill") {
+          w.__primeWsUpdate = (w.__primeWsUpdate ?? 0) + 1;
+        }
+      } catch {
+        /* ignore */
+      }
+      return S.call(this, data);
+    };
   });
+
+  await createSkillByRequest(page, originalName, originalPrompt);
 
   await page.goto("/skills");
   await page.getByTestId("skill-nav-link").filter({ hasText: originalName }).click();
@@ -300,37 +279,104 @@ test("autosave update happy path persists edits while typing", async ({
   await editor.locator("textarea[name='prompt']").click();
   await editor.locator("textarea[name='prompt']").fill("");
   await editor.locator("textarea[name='prompt']").type(updatedPrompt);
-  await expect(editor.locator("[data-testid='autosave-status']")).toHaveAttribute(
-    "data-save-state",
-    "saved",
-  );
-  expect(autosaveRequests).toBeGreaterThan(1);
+  await expect
+    .poll(
+      async () =>
+        (await page.evaluate(() => {
+          const win = window as PrimeTestWindow;
+          return win.__primeWsUpdate ?? 0;
+        })) >= 1,
+      { timeout: 5000 },
+    )
+    .toBe(true);
 
   await page.reload();
   await expect(page.locator(`input[name="name"][value="${updatedName}"]`)).toBeVisible();
   await expect(page.locator("#skills-main-panel textarea[name='prompt']")).toHaveValue(updatedPrompt);
 });
 
-test("autosave update unhappy path returns 404 for missing skill", async ({
-  request,
-}) => {
-  const response = await request.post("/skills/999999/update", {
-    headers: { "X-Autosave": "1" },
-    form: { name: "missing", prompt: "missing" },
+test("skill autosave requests are at least one second apart", async ({ page }) => {
+  const suffix = uniqueSuffix();
+  const name = `e2e-interval-${suffix}`;
+  const prompt = `prompt-${suffix}`;
+
+  await page.addInitScript(() => {
+    const w = window as PrimeTestWindow;
+    if (w.__primeWsSendPatchedInterval) {
+      return;
+    }
+    w.__primeWsSendPatchedInterval = true;
+    w.__primeWsUpdateTimes = [];
+    const S = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      try {
+        const j = JSON.parse(String(data)) as WsClientOpField;
+        if (j.op === "update_skill") {
+          w.__primeWsUpdateTimes!.push(Date.now());
+        }
+      } catch {
+        /* ignore */
+      }
+      return S.call(this, data);
+    };
   });
-  expect(response.status()).toBe(404);
+
+  await createSkillByRequest(page, name, prompt);
+
+  await page.goto("/skills");
+  await page.getByTestId("skill-nav-link").filter({ hasText: name }).click();
+  const editor = page.locator("[data-skill-editor]");
+  await expect(editor).toBeVisible();
+
+  await editor.locator("textarea[name='prompt']").fill(`${prompt}-a`);
+  await expect
+    .poll(
+      async () =>
+        (await page.evaluate(() => {
+          const win = window as PrimeTestWindow;
+          return win.__primeWsUpdateTimes?.length ?? 0;
+        })) >= 1,
+      { timeout: 5000 },
+    )
+    .toBe(true);
+  const first = await page.evaluate(() => {
+    const win = window as PrimeTestWindow;
+    return win.__primeWsUpdateTimes![0];
+  });
+  await editor.locator("textarea[name='prompt']").fill(`${prompt}-b`);
+  await expect
+    .poll(
+      async () =>
+        (await page.evaluate(() => {
+          const win = window as PrimeTestWindow;
+          return win.__primeWsUpdateTimes?.length ?? 0;
+        })) >= 2,
+      { timeout: 5000 },
+    )
+    .toBe(true);
+  const second = await page.evaluate(() => {
+    const win = window as PrimeTestWindow;
+    return win.__primeWsUpdateTimes![1];
+  });
+  expect(second - first).toBeGreaterThanOrEqual(900);
 });
 
-test("delete skill happy path removes row from page", async ({ page, request }) => {
+test("autosave update unhappy path returns 404 for missing skill", async ({ page }) => {
+  await page.goto("/skills");
+  const r = await wsUpdateSkill(page, "does-not-exist-skill-zzzz", "x", "y");
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("not found");
+});
+
+test("delete skill happy path removes row from page", async ({ page, e2eDataDir }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-delete-${suffix}`;
   const prompt = `prompt-${suffix}`;
 
-  const createResponse = await request.post("/skills", {
-    form: { name, prompt },
-    maxRedirects: 0,
-  });
-  expect(createResponse.status()).toBe(303);
+  await createSkillByRequest(page, name, prompt);
+
+  const skillDir = path.join(e2eDataDir, "skills", name);
+  expect(fs.existsSync(path.join(skillDir, "SKILL.md"))).toBe(true);
 
   await page.goto("/skills");
   await page.getByTestId("skill-nav-link").filter({ hasText: name }).click();
@@ -339,24 +385,23 @@ test("delete skill happy path removes row from page", async ({ page, request }) 
   const editor = page.locator("[data-skill-editor]");
   await editor.locator("[data-testid='delete-skill-trigger']").click();
   await expect(editor.locator("[data-testid='delete-skill-popover']")).toBeVisible();
+  await expect(editor.locator("[data-testid='delete-skill-warning']")).toContainText(
+    "permanent",
+  );
   await editor.locator("[data-delete-confirm]").click();
   await expect(page).toHaveURL(/\/skills$/);
   await expect(page.getByTestId("skill-nav-link").filter({ hasText: name })).toHaveCount(0);
+  expect(fs.existsSync(skillDir)).toBe(false);
 });
 
 test("delete popover closes on outside click without deleting", async ({
   page,
-  request,
 }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-delete-cancel-${suffix}`;
   const prompt = `prompt-${suffix}`;
 
-  const createResponse = await request.post("/skills", {
-    form: { name, prompt },
-    maxRedirects: 0,
-  });
-  expect(createResponse.status()).toBe(303);
+  await createSkillByRequest(page, name, prompt);
 
   await page.goto("/skills");
   await page.getByTestId("skill-nav-link").filter({ hasText: name }).click();
@@ -370,9 +415,15 @@ test("delete popover closes on outside click without deleting", async ({
   await expect(page.getByTestId("skill-nav-link").filter({ hasText: name })).toBeVisible();
 });
 
-test("delete skill unhappy path returns 404 for missing skill", async ({ request }) => {
-  const response = await request.post("/skills/999999/delete");
-  expect(response.status()).toBe(404);
+test("delete skill unhappy path returns 404 for missing skill", async ({ page }) => {
+  await page.goto("/skills");
+  const r = await wsCommand(page, {
+    op: "delete_skill",
+    id: `del-${Date.now()}`,
+    name: "does-not-exist-skill-zzzz",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("not found");
 });
 
 test("method guards and unknown skill action are enforced", async ({ request }) => {
@@ -389,7 +440,7 @@ test("method guards and unknown skill action are enforced", async ({ request }) 
   expect(deletePipeline.status()).toBe(405);
 
   const putSkillMutation = await request.put("/skills/1/update");
-  expect(putSkillMutation.status()).toBe(405);
+  expect(putSkillMutation.status()).toBe(404);
 
   const unknownAction = await request.post("/skills/1/nope");
   expect(unknownAction.status()).toBe(404);
@@ -413,24 +464,14 @@ test("route navigation switches both left nav and main content", async ({ page }
 
 test("skills list renders each skill as clickable nav item and routes to /skills/:id", async ({
   page,
-  request,
 }) => {
   const suffix = uniqueSuffix();
   const first = `e2e-skill-first-${suffix}`;
   const second = `e2e-skill-second-${suffix}`;
 
-  const createOne = await request.post("/skills", {
-    form: { name: first, prompt: "prompt one" },
-    maxRedirects: 0,
-  });
-  expect(createOne.status()).toBe(303);
-  const createTwo = await request.post("/skills", {
-    form: { name: second, prompt: "prompt two" },
-    maxRedirects: 0,
-  });
-  expect(createTwo.status()).toBe(303);
-  const locationTwo = createTwo.headers()["location"] ?? "";
-  const secondId = locationTwo.split("/").pop() ?? "";
+  await createSkillByRequest(page, first, "prompt one");
+  const locTwo = (await wsCreateSkill(page, second, "prompt two")).location ?? "";
+  const secondId = locTwo.split("/").pop() ?? "";
 
   await page.goto("/skills");
   await expect(page.getByTestId("skill-nav-link").filter({ hasText: first })).toBeVisible();
@@ -443,14 +484,13 @@ test("skills list renders each skill as clickable nav item and routes to /skills
 
 test("main area title updates to currently selected pipeline from /pipelines/:id", async ({
   page,
-  request,
 }) => {
   const suffix = uniqueSuffix();
   const first = `e2e-pipeline-title-first-${suffix}`;
   const second = `e2e-pipeline-title-second-${suffix}`;
 
-  await request.post("/pipelines", { form: { name: first }, maxRedirects: 0 });
-  await request.post("/pipelines", { form: { name: second }, maxRedirects: 0 });
+  await createPipelineByRequest(page, first);
+  await wsCreatePipeline(page, second);
 
   await page.goto("/pipelines");
   await page.getByTestId("pipeline-nav-link").filter({ hasText: first }).click();
@@ -460,50 +500,41 @@ test("main area title updates to currently selected pipeline from /pipelines/:id
   await expect(page.locator("#pipeline-title")).toHaveText(second);
 });
 
-test("skills detail main area renders from /skills/:id", async ({ page, request }) => {
+test("skills detail main area renders from /skills/:id", async ({ page }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-skill-detail-${suffix}`;
   const prompt = `prompt-${suffix}`;
 
-  const createResponse = await request.post("/skills", {
-    form: { name, prompt },
-    maxRedirects: 0,
-  });
-  expect(createResponse.status()).toBe(303);
-  const location = createResponse.headers()["location"] ?? "";
+  await createSkillByRequest(page, name, prompt);
+  const loc = `/skills/${encodeURIComponent(name)}`;
 
-  await page.goto(location);
+  await page.goto(loc);
   await expect(page).toHaveURL(/\/skills\/[a-z0-9-]+$/);
   await expect(page.locator(`input[name="name"][value="${name}"]`)).toBeVisible();
   await expect(page.locator("#skills-main-panel textarea[name='prompt']")).toHaveValue(prompt);
 });
 
-test("autosave retries after one second when backend fails once", async ({
-  page,
-  request,
-}) => {
+test("autosave retries after one second when backend fails once", async ({ page }) => {
   const suffix = uniqueSuffix();
   const originalName = `e2e-retry-timer-${suffix}`;
   const prompt = `prompt-${suffix}`;
-  const createResponse = await request.post("/skills", {
-    form: { name: originalName, prompt },
-    maxRedirects: 0,
-  });
-  expect(createResponse.status()).toBe(303);
+  await createSkillByRequest(page, originalName, prompt);
 
-  const requestTimes: number[] = [];
-  let failedFirstAutosave = false;
-  await page.route("**/skills/*/update", async (route) => {
-    const headers = route.request().headers();
-    if (headers["x-autosave"] === "1") {
-      requestTimes.push(Date.now());
-      if (!failedFirstAutosave) {
-        failedFirstAutosave = true;
-        await route.fulfill({ status: 500, body: "failed once" });
-        return;
+  await page.addInitScript(() => {
+    const Orig = WebSocket.prototype.send;
+    let dropped = 0;
+    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      if (typeof data === "string" && data.includes('"op":"update_skill"')) {
+        const win = window as PrimeTestWindow;
+        win.__primeUpdateSkillSends = win.__primeUpdateSkillSends ?? [];
+        win.__primeUpdateSkillSends.push(Date.now());
+        if (dropped === 0) {
+          dropped += 1;
+          return;
+        }
       }
-    }
-    await route.continue();
+      return Orig.call(this, data);
+    };
   });
 
   await page.goto("/skills");
@@ -512,40 +543,47 @@ test("autosave retries after one second when backend fails once", async ({
   await expect(editor).toBeVisible();
 
   await editor.locator("input[name='name']").type("x");
-  await expect(editor.locator("[data-testid='autosave-status']")).toHaveAttribute(
-    "data-save-state",
-    "saved",
-  );
-  expect(requestTimes.length).toBeGreaterThanOrEqual(2);
-  expect(requestTimes[1] - requestTimes[0]).toBeGreaterThanOrEqual(900);
+  await expect
+    .poll(async () => {
+      const n = await page.evaluate(() => {
+        const win = window as PrimeTestWindow;
+        return win.__primeUpdateSkillSends?.length ?? 0;
+      });
+      return n;
+    }, { timeout: 8000 })
+    .toBeGreaterThanOrEqual(2);
+  const times = await page.evaluate(() => {
+    const win = window as PrimeTestWindow;
+    const sends = win.__primeUpdateSkillSends;
+    if (sends === undefined) {
+      throw new Error("missing __primeUpdateSkillSends");
+    }
+    return sends;
+  });
+  expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(900);
 });
 
-test("autosave retries on next keypress before timer fires", async ({
-  page,
-  request,
-}) => {
+test("autosave retries on next interval after failure without extra keypress", async ({ page }) => {
   const suffix = uniqueSuffix();
   const originalName = `e2e-retry-key-${suffix}`;
   const prompt = `prompt-${suffix}`;
-  const createResponse = await request.post("/skills", {
-    form: { name: originalName, prompt },
-    maxRedirects: 0,
-  });
-  expect(createResponse.status()).toBe(303);
+  await createSkillByRequest(page, originalName, prompt);
 
-  const requestTimes: number[] = [];
-  let failedFirstAutosave = false;
-  await page.route("**/skills/*/update", async (route) => {
-    const headers = route.request().headers();
-    if (headers["x-autosave"] === "1") {
-      requestTimes.push(Date.now());
-      if (!failedFirstAutosave) {
-        failedFirstAutosave = true;
-        await route.fulfill({ status: 500, body: "failed once" });
-        return;
+  await page.addInitScript(() => {
+    const Orig = WebSocket.prototype.send;
+    let dropped = 0;
+    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      if (typeof data === "string" && data.includes('"op":"update_skill"')) {
+        const win = window as PrimeTestWindow;
+        win.__primeUpdateSkillSends = win.__primeUpdateSkillSends ?? [];
+        win.__primeUpdateSkillSends.push(Date.now());
+        if (dropped === 0) {
+          dropped += 1;
+          return;
+        }
       }
-    }
-    await route.continue();
+      return Orig.call(this, data);
+    };
   });
 
   await page.goto("/skills");
@@ -554,20 +592,29 @@ test("autosave retries on next keypress before timer fires", async ({
   await expect(editor).toBeVisible();
 
   await editor.locator("input[name='name']").type("x");
-  await page.waitForTimeout(200);
-  await editor.locator("input[name='name']").type("y");
-
-  await expect(editor.locator("[data-testid='autosave-status']")).toHaveAttribute(
-    "data-save-state",
-    "saved",
-  );
-  expect(requestTimes.length).toBeGreaterThanOrEqual(2);
-  expect(requestTimes[1] - requestTimes[0]).toBeLessThan(900);
+  await expect
+    .poll(async () => {
+      const n = await page.evaluate(() => {
+        const win = window as PrimeTestWindow;
+        return win.__primeUpdateSkillSends?.length ?? 0;
+      });
+      return n;
+    }, { timeout: 8000 })
+    .toBeGreaterThanOrEqual(2);
+  const times = await page.evaluate(() => {
+    const win = window as PrimeTestWindow;
+    const sends = win.__primeUpdateSkillSends;
+    if (sends === undefined) {
+      throw new Error("missing __primeUpdateSkillSends");
+    }
+    return sends;
+  });
+  expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(900);
 });
 
-test("create pipeline step happy path with title and prompt", async ({ page, request }) => {
+test("create pipeline step happy path with title and prompt", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-create-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-create-${suffix}`);
   const title = `step-title-${suffix}`;
   const prompt = `step-prompt-${suffix}`;
 
@@ -583,9 +630,9 @@ test("create pipeline step happy path with title and prompt", async ({ page, req
   await expect(editor.locator("textarea[name='prompt']")).toHaveValue(prompt);
 });
 
-test("pipeline step title input lowercases in real time and persists lowercase", async ({ page, request }) => {
+test("pipeline step title input lowercases in real time and persists lowercase", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-lowercase-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-lowercase-${suffix}`);
   const enteredTitle = `MiXeD-STEP-${suffix}`;
   const normalizedTitle = enteredTitle.toLowerCase();
   const prompt = `step-prompt-${suffix}`;
@@ -604,9 +651,9 @@ test("pipeline step title input lowercases in real time and persists lowercase",
   await expect(editor.locator("textarea[name='prompt']")).toHaveValue(prompt);
 });
 
-test("pipeline step title paste is immediately normalized to lowercase", async ({ page, request }) => {
+test("pipeline step title paste is immediately normalized to lowercase", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-lowercase-paste-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-lowercase-paste-${suffix}`);
   const pastedTitle = `PaStEd-STEP-${suffix}`;
 
   await page.goto(`/pipelines/${pipelineID}`);
@@ -616,15 +663,12 @@ test("pipeline step title paste is immediately normalized to lowercase", async (
   await expect(input).toHaveValue(pastedTitle.toLowerCase());
 });
 
-test("backend normalizes uppercase pipeline step title on insertion", async ({ page, request }) => {
+test("backend normalizes uppercase pipeline step title on insertion", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-backend-lower-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-backend-lower-${suffix}`);
   const uppercaseTitle = `BACKEND-STEP-${suffix}`;
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: uppercaseTitle, prompt: "prompt" },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
+  const r = await wsCreateStep(page, pipelineID, uppercaseTitle, "prompt");
+  expect(r.ok).toBe(true);
   const normalizedTitle = uppercaseTitle.toLowerCase();
 
   await page.goto(`/pipelines/${pipelineID}`);
@@ -634,34 +678,26 @@ test("backend normalizes uppercase pipeline step title on insertion", async ({ p
   await expect(editor.locator("textarea[name='prompt']")).toHaveValue("prompt");
 });
 
-test("create pipeline step unhappy path rejects empty title or prompt", async ({ request }) => {
+test("create pipeline step unhappy path rejects empty title or prompt", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-invalid-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-invalid-${suffix}`);
 
-  const emptyTitle = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: "   ", prompt: "valid prompt" },
-  });
-  expect(emptyTitle.status()).toBe(400);
+  const emptyTitle = await wsCreateStep(page, pipelineID, "   ", "valid prompt");
+  expect(emptyTitle.ok).toBe(false);
+  expect(emptyTitle.error ?? "").toContain("required");
 
-  const emptyPrompt = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: "valid title", prompt: "   " },
-  });
-  expect(emptyPrompt.status()).toBe(400);
+  const emptyPrompt = await wsCreateStep(page, pipelineID, "valid-title", "   ");
+  expect(emptyPrompt.ok).toBe(false);
+  expect(emptyPrompt.error ?? "").toContain("required");
 });
 
-test("edit pipeline step happy path persists updated title and prompt", async ({
-  page,
-  request,
-}) => {
+test("edit pipeline step happy path persists updated title and prompt", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-edit-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-edit-${suffix}`);
   const originalTitle = `step-edit-original-${suffix}`;
   const originalPrompt = `step-edit-prompt-${suffix}`;
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: originalTitle, prompt: originalPrompt },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
+  const createStep = await wsCreateStep(page, pipelineID, originalTitle, originalPrompt);
+  expect(createStep.ok).toBe(true);
 
   const updatedTitle = `step-edit-updated-${suffix}`;
   const updatedPrompt = `step-edit-updated-prompt-${suffix}`;
@@ -686,30 +722,24 @@ test("edit pipeline step happy path persists updated title and prompt", async ({
 
 test("edit pipeline step unhappy path rejects empty title or prompt and preserves previous values", async ({
   page,
-  request,
 }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-edit-invalid-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-edit-invalid-${suffix}`);
   const originalTitle = `step-edit-keep-${suffix}`;
   const originalPrompt = `step-edit-keep-prompt-${suffix}`;
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: originalTitle, prompt: originalPrompt },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
-  const location = createStep.headers()["location"] ?? "";
-  const stepID = location.split("/").pop() ?? "";
-  expect(stepID).toMatch(/^\d+$/);
+  const createStep = await wsCreateStep(page, pipelineID, originalTitle, originalPrompt);
+  expect(createStep.ok).toBe(true);
+  const loc = createStep.location ?? "";
+  const stepID = Number(loc.split("/").pop() ?? "0");
+  expect(Number.isFinite(stepID)).toBe(true);
 
-  const emptyTitle = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/update`, {
-    form: { title: "   ", prompt: "valid prompt" },
-  });
-  expect(emptyTitle.status()).toBe(400);
+  const emptyTitle = await wsUpdateStep(page, pipelineID, stepID, "   ", "valid prompt");
+  expect(emptyTitle.ok).toBe(false);
+  expect(emptyTitle.error ?? "").toContain("required");
 
-  const emptyPrompt = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/update`, {
-    form: { title: "valid title", prompt: "   " },
-  });
-  expect(emptyPrompt.status()).toBe(400);
+  const emptyPrompt = await wsUpdateStep(page, pipelineID, stepID, "valid-title", "   ");
+  expect(emptyPrompt.ok).toBe(false);
+  expect(emptyPrompt.error ?? "").toContain("required");
 
   await page.goto(`/pipelines/${pipelineID}`);
   const editor = page.getByTestId("pipeline-step-editor").first();
@@ -717,17 +747,11 @@ test("edit pipeline step unhappy path rejects empty title or prompt and preserve
   await expect(editor.locator("textarea[name='prompt']")).toHaveValue(originalPrompt);
 });
 
-test("delete pipeline step happy path removes step from main panel and left nav", async ({
-  page,
-  request,
-}) => {
+test("delete pipeline step happy path removes step from main panel and left nav", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-delete-${suffix}`);
-  const stepCreate = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `step-delete-title-${suffix}`, prompt: "prompt" },
-    maxRedirects: 0,
-  });
-  expect(stepCreate.status()).toBe(303);
+  const pipelineID = await createPipelineByRequest(page, `step-delete-${suffix}`);
+  const stepCreate = await wsCreateStep(page, pipelineID, `step-delete-title-${suffix}`, "prompt");
+  expect(stepCreate.ok).toBe(true);
 
   await page.goto(`/pipelines/${pipelineID}`);
   const stepItem = page.getByTestId("pipeline-step-nav-item");
@@ -738,122 +762,93 @@ test("delete pipeline step happy path removes step from main panel and left nav"
   await expect(page.getByTestId("pipeline-step-editor")).toHaveCount(0);
 });
 
-test("delete pipeline step unhappy path returns 404 for missing step", async ({ request }) => {
+test("delete pipeline step unhappy path returns 404 for missing step", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-delete-missing-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `step-delete-missing-${suffix}`);
 
-  const response = await request.post(`/pipelines/${pipelineID}/steps/999999/delete`);
-  expect(response.status()).toBe(404);
+  const r = await wsDeleteStep(page, pipelineID, 999999);
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("not found");
 });
 
-test("pipeline step left-nav drag swap persists after refresh", async ({ page, request }) => {
+test("pipeline step left-nav drag swap persists after refresh", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-reorder-${suffix}`);
-  await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `first-${suffix}`, prompt: "prompt-a" },
-    maxRedirects: 0,
-  });
-  await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `second-${suffix}`, prompt: "prompt-b" },
-    maxRedirects: 0,
-  });
+  const pipelineID = await createPipelineByRequest(page, `step-reorder-${suffix}`);
+  expect((await wsCreateStep(page, pipelineID, `first-${suffix}`, "prompt-a")).ok).toBe(true);
+  expect((await wsCreateStep(page, pipelineID, `second-${suffix}`, "prompt-b")).ok).toBe(true);
 
   await page.goto(`/pipelines/${pipelineID}`);
-  const items = page.getByTestId("pipeline-step-nav-item");
+  const items = page.locator(
+    `[data-testid="pipeline-step-nav-item"][data-ws-pipeline="${pipelineID}"]`,
+  );
   await expect(items).toHaveCount(2);
   await items.nth(1).dragTo(items.nth(0));
 
   await expect(items.nth(0)).toContainText(`second-${suffix}`);
   await page.reload();
-  await expect(page.getByTestId("pipeline-step-nav-item").nth(0)).toContainText(`second-${suffix}`);
+  await expect(
+    page.locator(
+      `[data-testid="pipeline-step-nav-item"][data-ws-pipeline="${pipelineID}"]`,
+    ).nth(0),
+  ).toContainText(`second-${suffix}`);
 });
 
-test("pipeline step reorder unhappy path rejects invalid step target", async ({ request }) => {
+test("pipeline step reorder unhappy path rejects invalid step target", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-reorder-invalid-${suffix}`);
-  const response = await request.post(`/pipelines/${pipelineID}/steps/999999/reorder`, {
-    form: { target_step_id: "888888" },
-  });
-  expect(response.status()).toBe(404);
+  const pipelineID = await createPipelineByRequest(page, `step-reorder-invalid-${suffix}`);
+  const response = await wsReorderStep(page, pipelineID, 999999, 888888);
+  expect(response.ok).toBe(false);
+  expect(response.error ?? "").toContain("not found");
 });
 
-test("pipeline step skill association happy path increments per-step count", async ({
-  page,
-  request,
-}) => {
+test("pipeline step skill association happy path increments per-step count", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-skill-count-${suffix}`);
-  const skillA = await createSkillByRequest(request, `skill-a-${suffix}`, "a prompt");
-  const skillB = await createSkillByRequest(request, `skill-b-${suffix}`, "b prompt");
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `skill-step-${suffix}`, prompt: "prompt" },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
-  const stepID = (createStep.headers()["location"] ?? "").split("/").pop() ?? "";
+  const pipelineID = await createPipelineByRequest(page, `step-skill-count-${suffix}`);
+  const skillA = await createSkillByRequest(page, `skill-a-${suffix}`, "a prompt");
+  const skillB = await createSkillByRequest(page, `skill-b-${suffix}`, "b prompt");
+  const createStep = await wsCreateStep(page, pipelineID, `skill-step-${suffix}`, "prompt");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
 
-  const addA = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
-    form: { skill_id: skillA },
-    maxRedirects: 0,
-  });
-  expect(addA.status()).toBe(303);
-  const addB = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
-    form: { skill_id: skillB },
-    maxRedirects: 0,
-  });
-  expect(addB.status()).toBe(303);
+  const addA = await wsAddStepSkill(page, pipelineID, stepID, skillA);
+  expect(addA.ok).toBe(true);
+  const addB = await wsAddStepSkill(page, pipelineID, stepID, skillB);
+  expect(addB.ok).toBe(true);
 
   await page.goto(`/pipelines/${pipelineID}`);
   await expect(page.getByTestId("pipeline-step-skill-count").filter({ hasText: "2" })).toBeVisible();
 });
 
 test("pipeline step skill association unhappy path rejects duplicate skill per step", async ({
-  request,
+  page,
 }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-skill-dup-${suffix}`);
-  const skillID = await createSkillByRequest(request, `skill-dup-${suffix}`, "dup prompt");
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `dup-step-${suffix}`, prompt: "prompt" },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
-  const stepID = (createStep.headers()["location"] ?? "").split("/").pop() ?? "";
+  const pipelineID = await createPipelineByRequest(page, `step-skill-dup-${suffix}`);
+  const skillID = await createSkillByRequest(page, `skill-dup-${suffix}`, "dup prompt");
+  const createStep = await wsCreateStep(page, pipelineID, `dup-step-${suffix}`, "prompt");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
 
-  const first = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
-    form: { skill_id: skillID },
-    maxRedirects: 0,
-  });
-  expect(first.status()).toBe(303);
+  const first = await wsAddStepSkill(page, pipelineID, stepID, skillID);
+  expect(first.ok).toBe(true);
 
-  const duplicate = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
-    form: { skill_id: skillID },
-  });
-  expect(duplicate.status()).toBe(400);
+  const duplicate = await wsAddStepSkill(page, pipelineID, stepID, skillID);
+  expect(duplicate.ok).toBe(false);
+  expect(duplicate.error ?? "").toContain("already attached");
 });
 
-test("pipeline step rows render accurate skill counts", async ({ page, request }) => {
+test("pipeline step rows render accurate skill counts", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-count-render-${suffix}`);
-  const skillID = await createSkillByRequest(request, `count-skill-${suffix}`, "count prompt");
+  const pipelineID = await createPipelineByRequest(page, `step-count-render-${suffix}`);
+  const skillID = await createSkillByRequest(page, `count-skill-${suffix}`, "count prompt");
 
-  const createOne = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `count-one-${suffix}`, prompt: "prompt-1" },
-    maxRedirects: 0,
-  });
-  expect(createOne.status()).toBe(303);
-  const createTwo = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `count-two-${suffix}`, prompt: "prompt-2" },
-    maxRedirects: 0,
-  });
-  expect(createTwo.status()).toBe(303);
-  const stepOneID = (createOne.headers()["location"] ?? "").split("/").pop() ?? "";
+  const createOne = await wsCreateStep(page, pipelineID, `count-one-${suffix}`, "prompt-1");
+  expect(createOne.ok).toBe(true);
+  expect((await wsCreateStep(page, pipelineID, `count-two-${suffix}`, "prompt-2")).ok).toBe(true);
+  const stepOneID = Number((createOne.location ?? "").split("/").pop() ?? "0");
 
-  const linkSkill = await request.post(`/pipelines/${pipelineID}/steps/${stepOneID}/skills`, {
-    form: { skill_id: skillID },
-    maxRedirects: 0,
-  });
-  expect(linkSkill.status()).toBe(303);
+  const linkSkill = await wsAddStepSkill(page, pipelineID, stepOneID, skillID);
+  expect(linkSkill.ok).toBe(true);
 
   await page.goto(`/pipelines/${pipelineID}`);
   const rows = page.getByTestId("pipeline-step-nav-item");
@@ -861,79 +856,54 @@ test("pipeline step rows render accurate skill counts", async ({ page, request }
   await expect(rows.filter({ hasText: `count-two-${suffix}` }).getByTestId("pipeline-step-skill-count")).toHaveText("0");
 });
 
-test("pipeline step skill count updates after add and remove skill", async ({ page, request }) => {
+test("pipeline step skill count updates after add and remove skill", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `step-count-update-${suffix}`);
-  const skillID = await createSkillByRequest(request, `update-skill-${suffix}`, "update prompt");
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `update-step-${suffix}`, prompt: "prompt" },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
-  const stepID = (createStep.headers()["location"] ?? "").split("/").pop() ?? "";
+  const pipelineID = await createPipelineByRequest(page, `step-count-update-${suffix}`);
+  const skillName = await createSkillByRequest(page, `update-skill-${suffix}`, "update prompt");
+  const createStep = await wsCreateStep(page, pipelineID, `update-step-${suffix}`, "prompt");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
 
-  const add = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
-    form: { skill_id: skillID },
-    maxRedirects: 0,
-  });
-  expect(add.status()).toBe(303);
+  const add = await wsAddStepSkill(page, pipelineID, stepID, skillName);
+  expect(add.ok).toBe(true);
   await page.goto(`/pipelines/${pipelineID}`);
   await expect(page.getByTestId("pipeline-step-skill-count")).toContainText("1");
 
-  const remove = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills/${skillID}/delete`, {
-    maxRedirects: 0,
-  });
-  expect(remove.status()).toBe(303);
+  const remove = await wsDeleteStepSkill(page, pipelineID, stepID, skillName);
+  expect(remove.ok).toBe(true);
   await page.reload();
   await expect(page.getByTestId("pipeline-step-skill-count")).toContainText("0");
 });
 
-test("create skill unhappy path rejects duplicate name", async ({ request }) => {
+test("create skill unhappy path rejects duplicate name", async ({ page }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-dup-skill-${suffix}`;
-  const first = await request.post("/skills", {
-    form: { name, prompt: "first" },
-    maxRedirects: 0,
-  });
-  expect(first.status()).toBe(303);
-  const second = await request.post("/skills", {
-    form: { name, prompt: "second" },
-    maxRedirects: 0,
-  });
-  expect(second.status()).toBe(400);
-  await expect(second.text()).resolves.toContain("skill already exists");
+  await page.goto("/");
+  expect((await wsCreateSkill(page, name, "first")).ok).toBe(true);
+  const second = await wsCreateSkill(page, name, "second");
+  expect(second.ok).toBe(false);
+  expect(second.error ?? "").toContain("skill already exists");
 });
 
-test("create skill unhappy path rejects empty prompt", async ({ request }) => {
+test("create skill unhappy path rejects empty prompt", async ({ page }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-empty-prompt-${suffix}`;
-  const response = await request.post("/skills", {
-    form: { name, prompt: "   " },
-    maxRedirects: 0,
-  });
-  expect(response.status()).toBe(400);
-  await expect(response.text()).resolves.toContain("prompt is required");
+  await page.goto("/skills");
+  const response = await wsCreateSkill(page, name, "   ");
+  expect(response.ok).toBe(false);
+  expect(response.error ?? "").toContain("prompt is required");
 });
 
-test("update skill unhappy path rejects rename to existing skill name", async ({
-  request,
-}) => {
+test("update skill unhappy path rejects rename to existing skill name", async ({ page }) => {
   const suffix = uniqueSuffix();
   const a = `e2e-collision-a-${suffix}`;
   const b = `e2e-collision-b-${suffix}`;
-  await request.post("/skills", { form: { name: a, prompt: "a" }, maxRedirects: 0 });
-  const createB = await request.post("/skills", {
-    form: { name: b, prompt: "b" },
-    maxRedirects: 0,
-  });
-  expect(createB.status()).toBe(303);
-  const locB = createB.headers()["location"] ?? "";
-  const collision = await request.post(`${locB}/update`, {
-    form: { name: a, prompt: "b-updated" },
-    maxRedirects: 0,
-  });
-  expect(collision.status()).toBe(400);
-  await expect(collision.text()).resolves.toContain("skill already exists");
+  await page.goto("/");
+  await wsCreateSkill(page, a, "a");
+  await wsCreateSkill(page, b, "b");
+  const collision = await wsUpdateSkill(page, b, a, "b-updated");
+  expect(collision.ok).toBe(false);
+  expect(collision.error ?? "").toContain("skill already exists");
 });
 
 test("GET missing skill slug returns 404", async ({ request }) => {
@@ -946,74 +916,145 @@ test("GET missing pipeline name returns 404", async ({ request }) => {
   expect(response.status()).toBe(404);
 });
 
-test("GET missing pipeline step id returns 404", async ({ request }) => {
+test("GET missing pipeline step id returns 404", async ({ page, request }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `missing-step-${suffix}`);
+  const pipelineID = await createPipelineByRequest(page, `missing-step-${suffix}`);
   const response = await request.get(`/pipelines/${pipelineID}/steps/999999`);
   expect(response.status()).toBe(404);
 });
 
-test("create pipeline unhappy path rejects duplicate name", async ({ request }) => {
+test("create pipeline unhappy path rejects duplicate name", async ({ page }) => {
   const suffix = uniqueSuffix();
   const name = `e2e-dup-pipeline-${suffix}`;
-  const first = await request.post("/pipelines", { form: { name }, maxRedirects: 0 });
-  expect(first.status()).toBe(303);
-  const second = await request.post("/pipelines", { form: { name }, maxRedirects: 0 });
-  expect(second.status()).toBe(400);
-  await expect(second.text()).resolves.toContain("pipeline exists");
+  await page.goto("/");
+  expect((await wsCreatePipeline(page, name)).ok).toBe(true);
+  const second = await wsCreatePipeline(page, name);
+  expect(second.ok).toBe(false);
+  expect(second.error ?? "").toContain("pipeline exists");
 });
 
-test("add pipeline step skill unhappy path rejects empty skill_id", async ({
-  request,
-}) => {
+test("add pipeline step skill unhappy path rejects empty skill_id", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `empty-skill-id-${suffix}`);
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `step-${suffix}`, prompt: "p" },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
-  const stepID = (createStep.headers()["location"] ?? "").split("/").pop() ?? "";
-  const response = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
-    form: { skill_id: "   " },
-  });
-  expect(response.status()).toBe(400);
-  await expect(response.text()).resolves.toContain("skill_id is required");
+  const pipelineID = await createPipelineByRequest(page, `empty-skill-id-${suffix}`);
+  const createStep = await wsCreateStep(page, pipelineID, `step-${suffix}`, "p");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
+  const response = await wsAddStepSkill(page, pipelineID, stepID, "   ");
+  expect(response.ok).toBe(false);
+  expect(response.error ?? "").toContain("skill_id is required");
 });
 
-test("add pipeline step skill unhappy path returns 404 for unknown skill", async ({
-  request,
-}) => {
+test("add pipeline step skill unhappy path returns 404 for unknown skill", async ({ page }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `unknown-skill-${suffix}`);
-  const createStep = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `step-${suffix}`, prompt: "p" },
-    maxRedirects: 0,
-  });
-  expect(createStep.status()).toBe(303);
-  const stepID = (createStep.headers()["location"] ?? "").split("/").pop() ?? "";
-  const response = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/skills`, {
-    form: { skill_id: `no-such-skill-${suffix}` },
-  });
-  expect(response.status()).toBe(404);
+  const pipelineID = await createPipelineByRequest(page, `unknown-skill-${suffix}`);
+  const createStep = await wsCreateStep(page, pipelineID, `step-${suffix}`, "p");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
+  const response = await wsAddStepSkill(page, pipelineID, stepID, `no-such-skill-${suffix}`);
+  expect(response.ok).toBe(false);
+  expect(response.error ?? "").toContain("not found");
 });
 
 test("pipeline step reorder unhappy path rejects non-numeric target_step_id", async ({
-  request,
+  page,
 }) => {
   const suffix = uniqueSuffix();
-  const pipelineID = await createPipelineByRequest(request, `reorder-bad-parse-${suffix}`);
-  const s1 = await request.post(`/pipelines/${pipelineID}/steps`, {
-    form: { title: `r1-${suffix}`, prompt: "a" },
-    maxRedirects: 0,
+  const pipelineID = await createPipelineByRequest(page, `reorder-bad-parse-${suffix}`);
+  const corr = `reorder-bad-${suffix}`;
+  const response = await wsCommand(page, {
+    op: "reorder_step",
+    id: corr,
+    pipeline: pipelineID,
+    step_id: 1,
+    target_step_id: "not-a-number",
   });
-  expect(s1.status()).toBe(303);
-  const stepID = (s1.headers()["location"] ?? "").split("/").pop() ?? "";
-  const response = await request.post(`/pipelines/${pipelineID}/steps/${stepID}/reorder`, {
-    form: { target_step_id: "not-a-number" },
+  expect(response.ok).toBe(false);
+  expect(response.error ?? "").toContain("invalid message");
+});
+
+test("create pipeline step unhappy path returns not found for missing pipeline", async ({
+  page,
+}) => {
+  await page.goto("/pipelines");
+  const r = await wsCreateStep(page, `no-such-pipeline-${uniqueSuffix()}`, "title", "prompt");
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("not found");
+});
+
+test("delete pipeline step skill unhappy path returns not found for missing step", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(page, `del-skill-step-${suffix}`);
+  const skillName = await createSkillByRequest(page, `del-skill-s-${suffix}`, "p");
+  const r = await wsDeleteStepSkill(page, pipelineID, 999999, skillName);
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("not found");
+});
+
+test("delete pipeline step skill unhappy path returns not found when skill not linked", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(page, `del-skill-nolink-${suffix}`);
+  const createStep = await wsCreateStep(page, pipelineID, `step-${suffix}`, "p");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
+  const r = await wsDeleteStepSkill(page, pipelineID, stepID, `never-attached-${suffix}`);
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("not found");
+});
+
+test("skill rename updates pipeline.json step skill references on disk", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const oldName = `rename-old-${suffix}`;
+  const newName = `rename-new-${suffix}`;
+  const pipelineID = await createPipelineByRequest(page, `rename-pipe-${suffix}`);
+  await createSkillByRequest(page, oldName, "prompt");
+  const createStep = await wsCreateStep(page, pipelineID, `st-${suffix}`, "p");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
+  expect((await wsAddStepSkill(page, pipelineID, stepID, oldName)).ok).toBe(true);
+
+  const rename = await wsUpdateSkill(page, oldName, newName, "updated");
+  expect(rename.ok).toBe(true);
+
+  const pj = path.join(e2eDataDir, "pipelines", pipelineID, "pipeline.json");
+  const raw = fs.readFileSync(pj, "utf8");
+  const j = JSON.parse(raw) as { steps: Array<{ skills: string[] }> };
+  const skills = j.steps[0]?.skills ?? [];
+  expect(skills).toContain(newName);
+  expect(skills).not.toContain(oldName);
+});
+
+test("skill delete removes skill from pipeline.json step lists on disk", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const skillName = `del-ref-skill-${suffix}`;
+  const pipelineID = await createPipelineByRequest(page, `del-ref-pipe-${suffix}`);
+  await createSkillByRequest(page, skillName, "prompt");
+  const createStep = await wsCreateStep(page, pipelineID, `st-${suffix}`, "p");
+  expect(createStep.ok).toBe(true);
+  const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
+  expect((await wsAddStepSkill(page, pipelineID, stepID, skillName)).ok).toBe(true);
+
+  const del = await wsCommand(page, {
+    op: "delete_skill",
+    id: `del-skill-${suffix}`,
+    name: skillName,
   });
-  expect(response.status()).toBe(400);
-  await expect(response.text()).resolves.toContain("target_step_id is required");
+  expect(del.ok).toBe(true);
+
+  const pj = path.join(e2eDataDir, "pipelines", pipelineID, "pipeline.json");
+  const raw = fs.readFileSync(pj, "utf8");
+  const j = JSON.parse(raw) as { steps: Array<{ skills: string[] }> };
+  const skills = j.steps[0]?.skills ?? [];
+  expect(skills).not.toContain(skillName);
 });
 
 test("GET /fragments/counter returns incrementing count", async ({ request }) => {

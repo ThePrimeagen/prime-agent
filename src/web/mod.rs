@@ -2,3 +2,4 @@
 
 pub mod handlers;
 pub mod render;
+pub mod ws_protocol;

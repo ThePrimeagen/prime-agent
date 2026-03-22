@@ -5,8 +5,8 @@
     "moduleResolution": "node",
     "strict": true,
     "noEmit": true,
-    "types": ["@playwright/test"],
+    "types": ["@playwright/test", "node"],
     "skipLibCheck": true
   },
-  "include": ["tests/e2e/**/*.ts", "playwright.config.ts"]
+  "include": ["tests/e2e/**/*.ts", "playwright.config.ts", "playwright.live.config.ts"]
 }

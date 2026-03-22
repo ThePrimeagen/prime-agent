@@ -2,12 +2,16 @@
   "name": "prime-agent-website-tests",
   "private": true,
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
+    "test:e2e:live": "playwright test -c playwright.live.config.ts",
     "test:e2e:headed": "playwright test --headed",
     "install:e2e": "playwright install chromium",
     "install:e2e:with-deps": "playwright install --with-deps chromium"
   },
   "devDependencies": {
-    "@playwright/test": "^1.54.2"
+    "@playwright/test": "^1.54.2",
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
   }
 }

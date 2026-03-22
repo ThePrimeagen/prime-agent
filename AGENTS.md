@@ -14,6 +14,7 @@
 
 # Website Guidance
 * always run all tests before considering the feature complete.
+* Run **both** Playwright projects: `npm run test:e2e` (default config, live reload off) **and** `npm run test:e2e:live` (live config, `tests/e2e/live/` only).
 * there can never be a failing test.  If a test fails, its a bug.
   - you must fix the bug in the code, not by altering the test.
   - if you are unable to fix the bug, you must stop the process and alert me with the error and WHY we MUST alter the test.

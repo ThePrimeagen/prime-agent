@@ -269,7 +269,7 @@ fn commit_skills_repo(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn git_is_repo(root: &Path) -> Result<bool> {
+pub(crate) fn git_is_repo(root: &Path) -> Result<bool> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -280,7 +280,7 @@ fn git_is_repo(root: &Path) -> Result<bool> {
     Ok(output.status.success())
 }
 
-fn git_is_clean(root: &Path) -> Result<bool> {
+pub(crate) fn git_is_clean(root: &Path) -> Result<bool> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)

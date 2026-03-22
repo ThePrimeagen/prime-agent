@@ -61,6 +61,12 @@ impl PipelineStore {
         self.pipeline_dir(name).join("pipeline.json")
     }
 
+    /// Path to `pipelines/<name>/pipeline.json` (for hashing / generation tracking).
+    #[must_use]
+    pub fn pipeline_json_path(&self, name: &str) -> PathBuf {
+        self.pipeline_file(name)
+    }
+
     pub fn validate_kebab_name(name: &str) -> Result<()> {
         if !name
             .chars()

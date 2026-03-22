@@ -43,3 +43,16 @@ Disable the full-screen TUI with `--no-tui` or `PRIME_AGENT_NO_TUI=1` (for CI or
 - New or updated skill and pipeline names must match `[a-z0-9-]+`.
 - Use lowercase letters, digits, and dashes only (no spaces or underscores).
 - Existing legacy skill names can still be referenced (`get`, `delete`), but any write/update must use the new format.
+
+## Website tests (Playwright)
+
+Run the full UI suite in two passes from the repository root:
+
+1. `npm run test:e2e` — uses `playwright.config.ts` (live reload disabled via `PRIME_AGENT_DISABLE_LIVE_RELOAD=1`; excludes `tests/e2e/live/`).
+2. `npm run test:e2e:live` — uses `playwright.live.config.ts` (live reload enabled; only `tests/e2e/live/`).
+
+Both must pass before considering website changes complete.
+
+## CLI `sync` / git (manual edge cases)
+
+Automated tests cover the happy path for `sync`, `sync-remote`, and `commit` in a git repo. Failures in `git pull --rebase`, `git add`, `git commit`, or `git status` depend on hooks, permissions, and remotes; verify those manually in a repo where you can force each failure (for example, a failing pre-commit hook or a remote that rejects the push).
