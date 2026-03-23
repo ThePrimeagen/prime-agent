@@ -6,9 +6,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crossterm::cursor::{MoveToColumn, MoveUp};
-use crossterm::execute;
-
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 const YELLOW: &str = "\x1b[33m";
@@ -72,6 +69,14 @@ struct StageState {
     last_block_refresh: Instant,
 }
 
+fn commit_tty_status_line(stdout: &mut io::Stdout, status_line_open: &mut bool) {
+    if *status_line_open {
+        let _ = writeln!(stdout);
+        let _ = stdout.flush();
+        *status_line_open = false;
+    }
+}
+
 /// Run on a dedicated thread; receives progress messages until [`ProgressMsg::Shutdown`].
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_pass_by_value)] // `Receiver` is moved into this thread
@@ -79,7 +84,8 @@ pub fn run_display_loop(rx: Receiver<ProgressMsg>, is_tty: bool) {
     let refresh = Duration::from_secs(pipeline_refresh_secs());
     let mut spinner_i = 0usize;
     let mut stage: Option<StageState> = None;
-    let mut last_status_len = 0usize;
+    let mut status_line_open = false;
+    let mut stdout = io::stdout();
 
     loop {
         let timeout = if stage.is_some() {
@@ -94,8 +100,9 @@ pub fn run_display_loop(rx: Receiver<ProgressMsg>, is_tty: bool) {
 
         match rx.recv_timeout(timeout) {
             Ok(ProgressMsg::PipelineHeader { pipeline, run_name }) => {
+                commit_tty_status_line(&mut stdout, &mut status_line_open);
                 println!("pipeline {pipeline} {run_name}");
-                let _ = io::stdout().flush();
+                let _ = stdout.flush();
             }
             Ok(ProgressMsg::StageStart {
                 stage_display,
@@ -105,6 +112,7 @@ pub fn run_display_loop(rx: Receiver<ProgressMsg>, is_tty: bool) {
                 pipeline_stages_total,
                 pipeline_stages_completed_before,
             }) => {
+                commit_tty_status_line(&mut stdout, &mut status_line_open);
                 spinner_i = 0;
                 let n = skills.len();
                 let skill_states = vec![SkillState::Running; n];
@@ -125,9 +133,16 @@ pub fn run_display_loop(rx: Receiver<ProgressMsg>, is_tty: bool) {
                 });
                 if let Some(st) = stage.as_mut() {
                     paint_skill_block(st);
-                    draw_status(is_tty, &mut last_status_len, st, &mut spinner_i);
+                    draw_status(
+                        st,
+                        &mut spinner_i,
+                        is_tty,
+                        false,
+                        &mut stdout,
+                        &mut status_line_open,
+                    );
                 }
-                let _ = io::stdout().flush();
+                let _ = stdout.flush();
             }
             Ok(ProgressMsg::SkillDone {
                 stage_display,
@@ -152,13 +167,7 @@ pub fn run_display_loop(rx: Receiver<ProgressMsg>, is_tty: bool) {
                     st.skills_done += 1;
                     st.stage_failed |= !ok;
 
-                    clear_status_line(is_tty, last_status_len);
-                    last_status_len = 0;
-
-                    if is_tty {
-                        let _ = repaint_skill_block_tty(st);
-                    }
-                    // Non-tty: the completion line below is enough (no duplicate skill block).
+                    commit_tty_status_line(&mut stdout, &mut status_line_open);
 
                     let outcome: &str = if ok {
                         "\u{001b}[32msucceeded\u{001b}[0m"
@@ -174,15 +183,20 @@ pub fn run_display_loop(rx: Receiver<ProgressMsg>, is_tty: bool) {
                         + usize::from(st.skills_done >= st.skills_total);
 
                     draw_status_with_pipeline_done(
-                        is_tty,
-                        &mut last_status_len,
                         st,
                         pipeline_done,
                         &mut spinner_i,
+                        is_tty,
+                        false,
+                        &mut stdout,
+                        &mut status_line_open,
                     );
 
                     let d = st.skills_done >= st.skills_total;
-                    let _ = io::stdout().flush();
+                    if d {
+                        commit_tty_status_line(&mut stdout, &mut status_line_open);
+                    }
+                    let _ = stdout.flush();
                     d
                 };
                 if done {
@@ -190,37 +204,45 @@ pub fn run_display_loop(rx: Receiver<ProgressMsg>, is_tty: bool) {
                 }
             }
             Ok(ProgressMsg::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
-                clear_status_line(is_tty, last_status_len);
                 break;
             }
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(ref mut st) = stage {
                     if st.last_block_refresh.elapsed() >= refresh {
-                        clear_status_line(is_tty, last_status_len);
-                        last_status_len = 0;
-                        if is_tty {
-                            let _ = repaint_skill_block_tty(st);
-                        } else {
-                            println!("---");
-                            paint_skill_block(st);
-                        }
+                        commit_tty_status_line(&mut stdout, &mut status_line_open);
+                        println!("---");
+                        paint_skill_block(st);
                         st.last_block_refresh = Instant::now();
                         let pipeline_done = st.pipeline_stages_completed_before
                             + usize::from(st.skills_done >= st.skills_total);
                         draw_status_with_pipeline_done(
-                            is_tty,
-                            &mut last_status_len,
                             st,
                             pipeline_done,
                             &mut spinner_i,
+                            is_tty,
+                            true,
+                            &mut stdout,
+                            &mut status_line_open,
                         );
-                    } else if is_tty {
-                        draw_status(is_tty, &mut last_status_len, st, &mut spinner_i);
+                    } else {
+                        let pipeline_done = st.pipeline_stages_completed_before
+                            + usize::from(st.skills_done >= st.skills_total);
+                        draw_status_with_pipeline_done(
+                            st,
+                            pipeline_done,
+                            &mut spinner_i,
+                            is_tty,
+                            false,
+                            &mut stdout,
+                            &mut status_line_open,
+                        );
                     }
+                    let _ = stdout.flush();
                 }
             }
         }
     }
+    commit_tty_status_line(&mut stdout, &mut status_line_open);
 }
 
 fn step_title_line(st: &StageState) -> String {
@@ -266,39 +288,52 @@ fn paint_skill_block(st: &StageState) {
     }
 }
 
-fn repaint_skill_block_tty(st: &StageState) -> io::Result<()> {
-    let n = u16::try_from(1 + st.skills.len()).unwrap_or(u16::MAX);
-    let mut out = io::stdout();
-    execute!(out, MoveUp(n), MoveToColumn(0))?;
-    print!("{}", step_title_line(st));
-    out.write_all(b"\n")?;
-    for i in 0..st.skills.len() {
-        print!("{}", skill_display_line(st, i));
-        out.write_all(b"\n")?;
-    }
-    Ok(())
-}
-
-fn clear_status_line(is_tty: bool, last_len: usize) {
-    if is_tty && last_len > 0 {
-        print!("\r\x1b[K");
-        let _ = io::stdout().flush();
-    }
-}
-
-fn draw_status(is_tty: bool, last_status_len: &mut usize, st: &StageState, spinner_i: &mut usize) {
+fn draw_status(
+    st: &StageState,
+    spinner_i: &mut usize,
+    is_tty: bool,
+    snapshot: bool,
+    stdout: &mut io::Stdout,
+    status_line_open: &mut bool,
+) {
     let pipeline_done =
         st.pipeline_stages_completed_before + usize::from(st.skills_done >= st.skills_total);
-    draw_status_with_pipeline_done(is_tty, last_status_len, st, pipeline_done, spinner_i);
+    draw_status_with_pipeline_done(
+        st,
+        pipeline_done,
+        spinner_i,
+        is_tty,
+        snapshot,
+        stdout,
+        status_line_open,
+    );
 }
 
 fn draw_status_with_pipeline_done(
-    is_tty: bool,
-    last_status_len: &mut usize,
     st: &StageState,
     pipeline_done: usize,
     spinner_i: &mut usize,
+    is_tty: bool,
+    snapshot: bool,
+    stdout: &mut io::Stdout,
+    status_line_open: &mut bool,
 ) {
+    let line = format_status_line(st, pipeline_done, spinner_i);
+    if is_tty {
+        if snapshot {
+            writeln!(stdout, "{line}").expect("stdout");
+            *status_line_open = false;
+        } else {
+            write!(stdout, "\r\x1b[K{line}").expect("stdout");
+            *status_line_open = true;
+        }
+    } else {
+        writeln!(stdout, "{line}").expect("stdout");
+        *status_line_open = false;
+    }
+}
+
+fn format_status_line(st: &StageState, pipeline_done: usize, spinner_i: &mut usize) -> String {
     let secs = st.started.elapsed().as_secs();
     let frame = SPINNER_FRAMES[*spinner_i % SPINNER_FRAMES.len()];
     *spinner_i = spinner_i.saturating_add(1);
@@ -313,13 +348,78 @@ fn draw_status_with_pipeline_done(
     };
 
     let pipe_part = format!("Pipeline {} / {}", pipeline_done, st.pipeline_stages_total);
-    let line = format!("{step_part} {pipe_part} {frame} {secs}s");
+    format!("{step_part} {pipe_part} {frame} {secs}s")
+}
 
-    if is_tty {
-        print!("\r\x1b[K{line}");
-        *last_status_len = line.chars().count();
-    } else {
-        println!("{line}");
+#[cfg(test)]
+mod tests {
+    use super::format_status_line;
+    use super::StageState;
+    use std::io::Write;
+    use std::time::Instant;
+
+    fn minimal_stage() -> StageState {
+        StageState {
+            stage_display: 1,
+            title: "t".to_string(),
+            skills: vec![],
+            skill_states: vec![],
+            line_counters: vec![],
+            skills_total: 1,
+            skills_done: 0,
+            stage_failed: false,
+            pipeline_stages_total: 1,
+            pipeline_stages_completed_before: 0,
+            started: Instant::now(),
+            last_block_refresh: Instant::now(),
+        }
     }
-    let _ = io::stdout().flush();
+
+    #[test]
+    fn tty_live_two_writes_no_newline_between() {
+        let mut buf = Vec::new();
+        let line1 = "Step 0 / 1 Pipeline 0 / 1 ⠋ 0s";
+        let line2 = "Step 0 / 1 Pipeline 0 / 1 ⠙ 0s";
+        write!(buf, "\r\x1b[K{line1}").unwrap();
+        write!(buf, "\r\x1b[K{line2}").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(!s.contains('\n'));
+        assert!(s.starts_with("\r\x1b[K"));
+    }
+
+    #[test]
+    fn tty_snapshot_ends_with_newline_no_cr_before_text() {
+        let line = "Step 0 / 1 Pipeline 0 / 1 ⠋ 0s";
+        let mut buf = Vec::new();
+        writeln!(buf, "{line}").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.ends_with('\n'));
+        assert!(!s.contains('\r'));
+    }
+
+    #[test]
+    fn commit_inserts_newline_before_static() {
+        let mut buf: Vec<u8> = Vec::new();
+        writeln!(&mut buf).unwrap();
+        writeln!(&mut buf, "---").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.starts_with("\n---"));
+    }
+
+    #[test]
+    fn non_tty_each_logical_line_has_newline() {
+        let mut buf = Vec::new();
+        let line = "Step 0 / 1 Pipeline 0 / 1 ⠋ 0s";
+        writeln!(buf, "{line}").unwrap();
+        assert!(buf.ends_with(b"\n"));
+    }
+
+    #[test]
+    fn format_status_line_increments_spinner() {
+        let st = minimal_stage();
+        let mut i = 0usize;
+        let a = format_status_line(&st, 0, &mut i);
+        let b = format_status_line(&st, 0, &mut i);
+        assert_ne!(a, b);
+    }
 }

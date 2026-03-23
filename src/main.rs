@@ -45,6 +45,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Command::Clear = &cli.command {
+        let cwd = std::env::current_dir().context("current_dir for clear")?;
+        crate::pipeline_run::clear_pipeline_runs(&cwd)?;
+        return Ok(());
+    }
+
     if let Command::Serve { bind } = &cli.command {
         let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
         let bind = bind.clone().unwrap_or_else(|| "127.0.0.1:8080".to_string());
@@ -107,6 +113,9 @@ fn main() -> Result<()> {
         }
         Command::Pipelines { .. } => {
             unreachable!("pipelines command handled before skills setup");
+        }
+        Command::Clear => {
+            unreachable!("clear command handled before skills setup");
         }
         Command::Delete { name } => {
             SkillsStore::validate_name(&name)?;

@@ -427,6 +427,10 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
         } => {
             let old_name = old_name.trim().to_string();
             let new_name = new_name.trim().to_string();
+            if new_name.is_empty() {
+                let loc = format!("/pipelines/{}", urlencoding::encode(&old_name));
+                return ack_ok(&id, Some(loc));
+            }
             suppress_pipeline_dir(state, &old_name);
             suppress_pipeline_dir(state, &new_name);
             if let Err(e) = state.pipelines.rename_pipeline(&old_name, &new_name) {

@@ -11,7 +11,8 @@ use std::path::PathBuf;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
-    /// Print debug messages to stderr (paths, stages, subprocess).
+    /// Print debug messages to stderr (paths, stages, subprocess), and echo each cursor-agent
+    /// stdout/stderr line as `{step}({n} / {total}):stdout|stderr:: ...`.
     #[arg(long, global = true)]
     pub debug: bool,
     /// Override configuration value (key:value). Can be repeated.
@@ -65,6 +66,8 @@ pub enum Command {
     Delete { name: String },
     /// Remove a skill section and delete its markdown file
     DeleteGlobally { name: String },
+    /// Delete pipeline run artifacts under `./.prime-agent/pipelines/` in the current directory
+    Clear,
     /// Pipelines: omit the subcommand to choose a pipeline from the interactive list (TTY) or list names (non-TTY); use `run` to invoke by name without the picker; or pass `--pipeline` with `--file` / `--prompt` to skip the picker and stdin prompt
     Pipelines {
         /// Pipeline to run (with `--file` or `--prompt`; omit `run` subcommand)

@@ -1057,7 +1057,8 @@
         if (!pipelineRenameFormState.has(key)) {
           pipelineRenameFormState.set(key, {
             inFlight: false,
-            lastSentPayload: ""
+            lastSentPayload: "",
+            renameDebounceId: null
           });
         }
         return pipelineRenameFormState.get(key);
@@ -1233,6 +1234,10 @@
           return;
         }
         if (trimmed === oldName.trim()) {
+          const sync = buildPipelineRenamePayload(form);
+          if (sync !== null) {
+            st.lastSentPayload = sync;
+          }
           return;
         }
         const payload = buildPipelineRenamePayload(form);
@@ -1270,6 +1275,49 @@
         } catch (_error) {
           st.inFlight = false;
         }
+      }
+
+      function schedulePipelineRenameAutosave(form) {
+        const st = getPipelineRenameFormState(form);
+        if (st.renameDebounceId != null) {
+          window.clearTimeout(st.renameDebounceId);
+        }
+        st.renameDebounceId = window.setTimeout(() => {
+          st.renameDebounceId = null;
+          if (!form.isConnected) {
+            return;
+          }
+          savePipelineRenameForm(form);
+        }, 450);
+      }
+
+      function wirePipelineRenameDebouncedInputs() {
+        document.querySelectorAll("form[data-ws-form='rename_pipeline']").forEach((form) => {
+          if (form.dataset.primeRenameDebounced === "1") {
+            return;
+          }
+          form.dataset.primeRenameDebounced = "1";
+          const input = form.querySelector("input[name='name']");
+          if (!input) {
+            return;
+          }
+          input.addEventListener("input", () => {
+            const st = getPipelineRenameFormState(form);
+            if (st.renameDebounceId != null) {
+              window.clearTimeout(st.renameDebounceId);
+              st.renameDebounceId = null;
+            }
+            const nameInput = form.querySelector("input[name='name']");
+            if (nameInput && nameInput.value.trim() === "") {
+              const p = buildPipelineRenamePayload(form);
+              if (p !== null) {
+                st.lastSentPayload = p;
+              }
+              return;
+            }
+            schedulePipelineRenameAutosave(form);
+          });
+        });
       }
 
       function saveEditor(editor) {
@@ -1418,6 +1466,7 @@
             });
           }, 1000);
         }
+        wirePipelineRenameDebouncedInputs();
       }
 
       function closeDeletePopovers(exceptControl) {
@@ -1578,18 +1627,7 @@
             return;
           }
           if (ws === "rename_pipeline") {
-            const fd = new FormData(form);
-            const oldName = form.getAttribute("data-old-name") || "";
-            const newName = String(fd.get("name") || "").trim();
-            if (newName === "") {
-              return;
-            }
-            sendPrime({
-              op: "rename_pipeline",
-              id: id,
-              old_name: oldName,
-              new_name: newName
-            });
+            savePipelineRenameForm(form);
             return;
           }
           if (ws === "create_step") {

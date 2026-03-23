@@ -9,8 +9,8 @@ use std::fs;
 use std::io::{BufRead, BufReader, IsTerminal, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::SystemTime;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -23,6 +23,9 @@ use crate::skills_store::SkillsStore;
 use rand::Rng;
 
 const SUPPORTED_CLIRUNNER: &str = "cursor-agent";
+
+/// Serialize debug echo lines for concurrent `cursor-agent` tasks.
+static DEBUG_STREAM_STDERR_LOCK: Mutex<()> = Mutex::new(());
 
 static INSTALL_CTRLC: Once = Once::new();
 
@@ -41,6 +44,25 @@ fn install_ctrlc_handler() {
 #[derive(Debug, Clone, Copy)]
 pub struct PipelineRunOptions {
     pub debug: bool,
+}
+
+/// When `--debug` is set, each subprocess stdout/stderr line is echoed to stderr with this context.
+#[derive(Clone)]
+pub(crate) struct DebugStreamCtx {
+    pub(crate) step_title: String,
+    /// 1-based index of this task within the pipeline step.
+    pub(crate) task_pos: usize,
+    pub(crate) task_total: usize,
+}
+
+fn debug_stream_line(ctx: &DebugStreamCtx, stream: &str, line: &str) {
+    let _lock = DEBUG_STREAM_STDERR_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    eprintln!(
+        "{}({} / {}):{}:: {}",
+        ctx.step_title, ctx.task_pos, ctx.task_total, stream, line
+    );
 }
 
 #[derive(Serialize)]
@@ -80,89 +102,43 @@ pub(crate) fn run_name_filesystem_slug(run_name: &str) -> String {
         .join("-")
 }
 
-fn resolve_pipeline_run_dir(cwd: &Path, pipeline_name: &str) -> Result<(PathBuf, String)> {
+fn resolve_pipeline_run_dir(cwd: &Path) -> Result<(PathBuf, String)> {
     let pipelines_root = cwd.join(".prime-agent").join("pipelines");
     fs::create_dir_all(&pipelines_root)
         .with_context(|| format!("create '{}'", pipelines_root.display()))?;
 
-    // Resume: reuse the most recently touched run directory for this pipeline. Skip directory names
-    // equal to `pipeline_name` (legacy `pipelines/<pipeline>/`); new runs always use adj-noun slugs.
-    let mut best: Option<(PathBuf, String, SystemTime)> = None;
-    let read = fs::read_dir(&pipelines_root)
-        .with_context(|| format!("read_dir '{}'", pipelines_root.display()))?;
-    for entry in read {
-        let entry = entry.with_context(|| "read_dir entry")?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let leaf = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if leaf == pipeline_name {
-            continue;
-        }
-        let meta_path = path.join("meta.json");
-        if !meta_path.is_file() {
-            continue;
-        }
-        let raw =
-            fs::read_to_string(&meta_path).with_context(|| format!("read '{}'", meta_path.display()))?;
-        let v: Value = serde_json::from_str(&raw).with_context(|| format!("parse '{}'", meta_path.display()))?;
-        let meta_pipeline = v.get("pipeline").and_then(|s| s.as_str()).unwrap_or("");
-        if meta_pipeline != pipeline_name {
-            continue;
-        }
-        let run_name = v
-            .get("run_name")
-            .and_then(|s| s.as_str())
-            .map_or_else(generate_run_name, ToString::to_string);
-        let mt = fs::metadata(&meta_path)
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        match &best {
-            None => best = Some((path, run_name, mt)),
-            Some((_, _, t0)) if mt > *t0 => best = Some((path, run_name, mt)),
-            _ => {}
-        }
-    }
-
-    if let Some((dir, run_name, _)) = best {
-        return Ok((dir, run_name));
-    }
-
-    let mut candidate_run_name = String::new();
-    let mut preferred_dir = pipelines_root.clone();
-
-    for _ in 0..64 {
-        let name = generate_run_name();
-        let slug = run_name_filesystem_slug(&name);
-        let dir = pipelines_root.join(&slug);
-        if !dir.join("meta.json").is_file() {
-            candidate_run_name = name;
-            preferred_dir = dir;
-            break;
-        }
-    }
-
-    if candidate_run_name.is_empty() {
-        for _ in 0..256 {
-            let name = format!("{}-{:04x}", generate_run_name(), rand::random::<u16>());
-            let slug = run_name_filesystem_slug(&name);
-            let dir = pipelines_root.join(&slug);
-            if !dir.join("meta.json").is_file() {
-                candidate_run_name = name;
-                preferred_dir = dir;
-                break;
-            }
-        }
-    }
-
-    if candidate_run_name.is_empty() {
-        bail!("could not allocate a unique pipeline run directory");
-    }
+    let (preferred_dir, candidate_run_name) = allocate_new_run_dir(&pipelines_root)?;
 
     fs::create_dir_all(&preferred_dir)
         .with_context(|| format!("create '{}'", preferred_dir.display()))?;
     Ok((preferred_dir, candidate_run_name))
+}
+
+/// Remove all pipeline run artifacts under `cwd/.prime-agent/pipelines/`.
+pub fn clear_pipeline_runs(cwd: &Path) -> Result<()> {
+    let dir = cwd.join(".prime-agent").join("pipelines");
+    if dir.is_dir() {
+        fs::remove_dir_all(&dir).with_context(|| format!("remove '{}'", dir.display()))?;
+    }
+    Ok(())
+}
+
+/// Pick a fresh adj-noun run name whose directory has no `meta.json`, rolling until one is free.
+fn allocate_new_run_dir(pipelines_root: &Path) -> Result<(PathBuf, String)> {
+    let mut plain_tries: u32 = 0;
+    loop {
+        let name = if plain_tries < 100_000 {
+            plain_tries += 1;
+            generate_run_name()
+        } else {
+            format!("{}-{:04x}", generate_run_name(), rand::random::<u16>())
+        };
+        let slug = run_name_filesystem_slug(&name);
+        let dir = pipelines_root.join(&slug);
+        if !dir.join("meta.json").is_file() {
+            return Ok((dir, name));
+        }
+    }
 }
 
 pub fn debug_log(debug: bool, msg: impl std::fmt::Display) {
@@ -229,7 +205,7 @@ fn run_plain(
 
     validate_attached_skills(skills_store, &steps)?;
 
-    let (out_dir, run_name) = resolve_pipeline_run_dir(cwd, pipeline_name)?;
+    let (out_dir, run_name) = resolve_pipeline_run_dir(cwd)?;
     let meta_path = out_dir.join("meta.json");
 
     let meta = MetaFile {
@@ -433,6 +409,15 @@ fn run_stage(
             let ti_idx = ti;
             let o_lines = line_counters[ti].0.clone();
             let e_lines = line_counters[ti].1.clone();
+            let debug_stream = if dbg {
+                Some(DebugStreamCtx {
+                    step_title: ctx.step.title.clone(),
+                    task_pos: ti + 1,
+                    task_total: specs.len(),
+                })
+            } else {
+                None
+            };
             handles.push(scope.spawn(move || {
                 debug_log(dbg, "spawning cursor-agent");
                 let res = run_cursor_agent_streaming(
@@ -444,6 +429,7 @@ fn run_stage(
                     Some(o_lines),
                     Some(e_lines),
                     yolo,
+                    debug_stream,
                 );
                 let ok = res.3.is_ok();
                 let _ = progress_tx.send(ProgressMsg::SkillDone {
@@ -677,6 +663,7 @@ pub(crate) fn run_cursor_agent_streaming(
     stdout_line_count: Option<Arc<AtomicUsize>>,
     stderr_line_count: Option<Arc<AtomicUsize>>,
     yolo: bool,
+    debug_stream: Option<DebugStreamCtx>,
 ) -> (String, String, i32, Result<String, String>) {
     let mut cmd = Command::new(binary);
     cmd.arg("--print");
@@ -741,11 +728,17 @@ pub(crate) fn run_cursor_agent_streaming(
         );
     };
 
+    let stdout_debug = debug_stream.clone();
+    let stderr_debug = debug_stream;
+
     let stdout_handle = thread::spawn(move || {
         let mut acc = String::new();
         let reader = BufReader::new(stdout_pipe);
         for line in reader.lines() {
             let line = line.unwrap_or_default();
+            if let Some(ref ctx) = stdout_debug {
+                debug_stream_line(ctx, "stdout", &line);
+            }
             acc.push_str(&line);
             acc.push('\n');
             if let Some(ref c) = stdout_line_count {
@@ -763,6 +756,9 @@ pub(crate) fn run_cursor_agent_streaming(
         let reader = BufReader::new(stderr_pipe);
         for line in reader.lines() {
             let line = line.unwrap_or_default();
+            if let Some(ref ctx) = stderr_debug {
+                debug_stream_line(ctx, "stderr", &line);
+            }
             acc.push_str(&line);
             acc.push('\n');
             if let Some(ref c) = stderr_line_count {
@@ -829,23 +825,59 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
     Ok(())
 }
 
-pub(crate) fn generate_run_name() -> String {
+pub(crate) fn generate_run_name_with_rng(rng: &mut impl Rng) -> String {
     const ADJ: &[&str] = &[
         "quiet", "brave", "calm", "swift", "gentle", "bright", "clever", "noble", "wild", "keen",
         "brisk", "crisp", "steady", "nimble", "subtle", "rugged", "solemn", "merry", "vivid",
         "lucid", "hardy", "stoic", "rustic", "cosmic", "floral", "sonic", "timely", "latent",
         "docile", "fierce", "agile", "ample", "ardent", "hollow", "brittle", "lofty", "narrow",
-        "patient", "radiant", "dapper",
+        "patient", "radiant", "dapper", "sunny", "misty", "stormy", "frosty", "balmy", "dusty",
+        "smoky", "musky", "tangy", "zesty", "humble", "proud", "sober", "jolly", "weary", "cozy",
+        "grimy", "glossy", "velvety", "silken", "azure", "crimson", "scarlet", "violet", "indigo",
+        "saffron", "ochre", "umber", "sepia", "teal", "plucky", "sturdy", "pliant", "curvy",
+        "linear", "planar",
     ];
     const NOUN: &[&str] = &[
         "harbor", "meadow", "cipher", "compass", "beacon", "atlas", "vertex", "summit", "delta",
         "quartz", "brook", "canyon", "crest", "drift", "ember", "fjord", "glacier", "inlet",
         "island", "lagoon", "marsh", "node", "oasis", "peak", "prism", "quarry", "reef", "ridge",
         "river", "spire", "tundra", "upland", "vale", "widget", "nova", "orbit", "pixel", "quanta",
-        "raster", "signal",
+        "raster", "signal", "vector", "tensor", "matrix", "bundle", "packet", "stream", "window",
+        "bridge", "tunnel", "gateway", "portal", "pillar", "cavern", "grotto", "alcove", "niche",
+        "vault", "dome", "arch", "span", "shelter", "gazebo", "pavilion", "terrace", "veranda",
+        "atrium", "cloister", "corridor", "gallery", "foyer", "stairway", "doorway", "pathway",
+        "rocket", "comet",
     ];
-    let mut rng = rand::thread_rng();
     let ai = rng.gen_range(0..ADJ.len());
     let ni = rng.gen_range(0..NOUN.len());
     format!("{}-{}", ADJ[ai], NOUN[ni])
+}
+
+pub(crate) fn generate_run_name() -> String {
+    generate_run_name_with_rng(&mut rand::thread_rng())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_run_name_with_rng;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    #[test]
+    fn generate_run_name_seeded_is_deterministic() {
+        let mut a = StdRng::seed_from_u64(42);
+        let mut b = StdRng::seed_from_u64(42);
+        assert_eq!(
+            generate_run_name_with_rng(&mut a),
+            generate_run_name_with_rng(&mut b)
+        );
+    }
+
+    #[test]
+    fn generate_run_name_seeded_sequence_differs() {
+        let mut rng = StdRng::seed_from_u64(7);
+        let x = generate_run_name_with_rng(&mut rng);
+        let y = generate_run_name_with_rng(&mut rng);
+        assert_ne!(x, y);
+    }
 }

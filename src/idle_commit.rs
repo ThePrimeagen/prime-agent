@@ -85,6 +85,7 @@ fn run_idle_commit_cursor(data_dir: &Path) -> Result<()> {
         None,
         None,
         yolo,
+        None,
     );
     result
         .map(|_| ())
