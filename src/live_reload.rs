@@ -26,14 +26,18 @@ impl FsSuppress {
     fn is_suppressed(&self, path: &Path) -> bool {
         let mut m = self.inner.lock().expect("fs suppress lock");
         m.retain(|_, until| *until > Instant::now());
-        m.iter().any(|(p, _)| path.starts_with(p) || p.starts_with(path))
+        m.iter()
+            .any(|(p, _)| path.starts_with(p) || p.starts_with(path))
     }
 }
 
 /// Whether live reload is enabled (WebSocket + fs watcher). Disabled in e2e via env.
 #[must_use]
 pub fn live_reload_enabled_from_env() -> bool {
-    std::env::var("PRIME_AGENT_DISABLE_LIVE_RELOAD").ok().as_deref() != Some("1")
+    std::env::var("PRIME_AGENT_DISABLE_LIVE_RELOAD")
+        .ok()
+        .as_deref()
+        != Some("1")
 }
 
 #[must_use]
@@ -42,7 +46,11 @@ pub fn live_broadcast_channel() -> broadcast::Sender<String> {
 }
 
 /// Returns true if a path under `data_dir` is a skill or pipeline file change we care about.
-pub(crate) fn should_notify_fs_event(event: &Event, data_dir: &Path, suppress: &FsSuppress) -> bool {
+pub(crate) fn should_notify_fs_event(
+    event: &Event,
+    data_dir: &Path,
+    suppress: &FsSuppress,
+) -> bool {
     for path in &event.paths {
         if should_notify_path(path, data_dir) && !suppress.is_suppressed(path) {
             return true;

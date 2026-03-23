@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -11,13 +11,18 @@ use std::path::PathBuf;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+    /// Print debug messages to stderr (paths, stages, subprocess).
+    #[arg(long, global = true)]
+    pub debug: bool,
     /// Override configuration value (key:value). Can be repeated.
     #[arg(long = "config", value_name = "key:value")]
     pub config_overrides: Vec<String>,
-    /// Prime-agent data directory (skills/, pipelines/, …). Default: XDG_CONFIG_HOME/prime-agent.
+    /// Prime-agent data directory (pipelines/, and default skills/ when `--skills-dir` is omitted).
+    /// Default: current working directory (no global-config or environment fallbacks).
     #[arg(long, global = true)]
     pub data_dir: Option<PathBuf>,
-    /// Directory containing skill markdown files (default: ./skills)
+    /// Directory containing skill markdown files (default: `<data-dir>/skills`, or `./skills` when
+    /// `--data-dir` is omitted).
     #[arg(long)]
     pub skills_dir: Option<PathBuf>,
     /// Path to AGENTS.md (default: ./AGENTS.md)
@@ -33,10 +38,7 @@ pub enum Command {
         skills: Vec<String>,
     },
     /// Store a skill markdown file under skills/<name>.md
-    Set {
-        name: String,
-        path: PathBuf,
-    },
+    Set { name: String, path: PathBuf },
     /// Sync skills with AGENTS.md
     Sync,
     /// Sync skills and pull remote changes
@@ -60,15 +62,23 @@ pub enum Command {
         bind: Option<String>,
     },
     /// Remove a skill section from AGENTS.md
-    Delete {
-        name: String,
-    },
+    Delete { name: String },
     /// Remove a skill section and delete its markdown file
-    DeleteGlobally {
-        name: String,
-    },
-    /// Pipelines: omit the subcommand to pick a pipeline interactively (TTY) or list names (non-TTY); use `run` to invoke by name without the picker
+    DeleteGlobally { name: String },
+    /// Pipelines: omit the subcommand to choose a pipeline from the interactive list (TTY) or list names (non-TTY); use `run` to invoke by name without the picker; or pass `--pipeline` with `--file` / `--prompt` to skip the picker and stdin prompt
     Pipelines {
+        /// Pipeline to run (with `--file` or `--prompt`; omit `run` subcommand)
+        #[arg(long)]
+        pipeline: Option<String>,
+        /// User prompt (with `--pipeline`; mutually exclusive with `--file`)
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Read user prompt from file (with `--pipeline`; mutually exclusive with `--prompt`)
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Ignored (pipelines always use plain stdout; kept for compatibility)
+        #[arg(long)]
+        no_tui: bool,
         #[command(subcommand)]
         action: Option<PipelinesAction>,
     },
@@ -76,7 +86,7 @@ pub enum Command {
 
 #[derive(Subcommand, Debug)]
 pub enum PipelinesAction {
-    /// Execute pipeline stages; outputs under .prime-agent/pipeline-<name>/
+    /// Execute pipeline stages; outputs under .prime-agent/pipelines/<adj-noun-slug>/
     Run {
         /// Pipeline name (kebab-case, must exist under data-dir/pipelines/)
         name: String,
@@ -86,7 +96,7 @@ pub enum PipelinesAction {
         /// Read user prompt from a UTF-8 file (mutually exclusive with --prompt)
         #[arg(long)]
         file: Option<PathBuf>,
-        /// Disable full-screen TUI (also `PRIME_AGENT_NO_TUI=1`)
+        /// Ignored (kept for compatibility; use `PRIME_AGENT_NO_TUI=1` similarly)
         #[arg(long)]
         no_tui: bool,
     },

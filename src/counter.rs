@@ -15,11 +15,11 @@ pub fn increment_and_get(path: &Path) -> Result<i64> {
     }
     n += 1;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create '{}'", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create '{}'", parent.display()))?;
     }
     let payload = json!({ "count": n });
     let serialized = serde_json::to_string_pretty(&payload).context("serialize counter")?;
-    fs::write(path, format!("{serialized}\n")).with_context(|| format!("write '{}'", path.display()))?;
+    fs::write(path, format!("{serialized}\n"))
+        .with_context(|| format!("write '{}'", path.display()))?;
     Ok(n)
 }

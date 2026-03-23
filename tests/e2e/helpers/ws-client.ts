@@ -91,6 +91,21 @@ export async function wsCreatePipeline(
   return { ok: r.ok, location: r.location, error: r.error };
 }
 
+export async function wsRenamePipeline(
+  page: Page,
+  oldName: string,
+  newName: string,
+): Promise<{ ok: boolean; location?: string; error?: string }> {
+  const id = nextId();
+  const r = await wsCommand(page, {
+    op: "rename_pipeline",
+    id,
+    old_name: oldName,
+    new_name: newName,
+  });
+  return { ok: r.ok, location: r.location, error: r.error };
+}
+
 export async function wsUpdateSkill(
   page: Page,
   oldName: string,

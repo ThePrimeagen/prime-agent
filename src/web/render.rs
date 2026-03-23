@@ -67,19 +67,11 @@ fn enc(s: &str) -> String {
 }
 
 fn aria_current(active: &str, tab: &str) -> &'static str {
-    if active == tab {
-        "page"
-    } else {
-        "false"
-    }
+    if active == tab { "page" } else { "false" }
 }
 
 fn hidden_attr(active: &str, tab: &str) -> &'static str {
-    if active == tab {
-        ""
-    } else {
-        " hidden"
-    }
+    if active == tab { "" } else { " hidden" }
 }
 
 /// Inner HTML for `#left-nav` (tabs + skills + pipeline sections).
@@ -93,11 +85,11 @@ pub fn render_left_nav_inner(p: &PageInput<'_>) -> String {
     o.push_str(hidden_attr(p.active_section, "skills"));
     o.push_str(">\n          <h2 style=\"margin-top:0;\">Skills</h2>\n          <button\n            type=\"button\"\n            data-testid=\"skill-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('skill-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"skill-modal\">\n            <form data-ws-form=\"create_skill\">\n              <h3>Create Skill</h3>\n              <label>Name<br><input name=\"name\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('skill-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n");
     if !p.skills.is_empty() {
-        o.push_str("          <ul id=\"skills-nav-list\" style=\"padding-left:0;margin-top:1rem;\">\n");
+        o.push_str(
+            "          <ul id=\"skills-nav-list\" style=\"padding-left:0;margin-top:1rem;\">\n",
+        );
         for skill in p.skills {
-            let sel = p
-                .selected_skill
-                .is_some_and(|s| s.name == skill.name);
+            let sel = p.selected_skill.is_some_and(|s| s.name == skill.name);
             let _ = write!(
                 o,
                 "            <li style=\"list-style:none;margin-top:0.5rem;\">\n              <a\n                data-testid=\"skill-nav-link\"\n                data-selected=\"{}\"\n                href=\"/skills/{}\"\n                style=\"display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;\">{}</a>\n            </li>\n",
@@ -114,11 +106,11 @@ pub fn render_left_nav_inner(p: &PageInput<'_>) -> String {
     o.push_str(hidden_attr(p.active_section, "pipelines"));
     o.push_str(">\n          <h2 style=\"margin-top:0;\">Pipeline</h2>\n          <button\n            type=\"button\"\n            data-testid=\"pipeline-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('pipeline-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"pipeline-modal\">\n            <form data-ws-form=\"create_pipeline\">\n              <h3>Create Pipeline</h3>\n              <p data-testid=\"pipeline-create-error\" role=\"alert\" style=\"color:#b91c1c;margin:0.5rem 0;\" hidden></p>\n              <label>Name<br><input name=\"name\" data-lowercase-field=\"pipeline-name\" required></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('pipeline-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n");
     if !p.pipelines.is_empty() {
-        o.push_str("          <ul id=\"pipeline-nav-list\" style=\"padding-left:0;margin-top:1rem;\">\n");
+        o.push_str(
+            "          <ul id=\"pipeline-nav-list\" style=\"padding-left:0;margin-top:1rem;\">\n",
+        );
         for pl in p.pipelines {
-            let sel = p
-                .selected_pipeline
-                .is_some_and(|s| s.name == pl.name);
+            let sel = p.selected_pipeline.is_some_and(|s| s.name == pl.name);
             let _ = write!(
                 o,
                 "            <li style=\"list-style:none;margin-top:0.5rem;\">\n              <a\n                data-testid=\"pipeline-nav-link\"\n                data-selected=\"{}\"\n                href=\"/pipelines/{}\"\n                style=\"display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;\">{}</a>\n            </li>\n",
@@ -133,7 +125,9 @@ pub fn render_left_nav_inner(p: &PageInput<'_>) -> String {
     }
 
     if let Some(pl) = p.selected_pipeline {
-        o.push_str("          <h3 style=\"margin-top:1.25rem;margin-bottom:0.25rem;\">Steps</h3>\n");
+        o.push_str(
+            "          <h3 style=\"margin-top:1.25rem;margin-bottom:0.25rem;\">Steps</h3>\n",
+        );
         if !p.pipeline_steps.is_empty() {
             o.push_str("          <ul id=\"pipeline-step-nav-list\" style=\"padding-left:0;margin-top:0.5rem;\">\n");
             for step in p.pipeline_steps {
@@ -184,8 +178,10 @@ pub fn render_main_inner(p: &PageInput<'_>) -> String {
     if let Some(pl) = p.selected_pipeline {
         let _ = write!(
             o,
-            "          <h1 id=\"pipeline-title\">{}</h1>\n          <button\n            type=\"button\"\n            data-testid=\"pipeline-step-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('pipeline-step-modal').showModal();\">Add Step</button>\n\n          <dialog id=\"pipeline-step-modal\">\n            <form data-ws-form=\"create_step\" data-pipeline=\"{}\">\n              <h3>Create Step</h3>\n              <label>Title<br><input name=\"title\" data-lowercase-field=\"pipeline-step-title\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('pipeline-step-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n",
-            esc_html(&pl.name),
+            "          <article data-testid=\"pipeline-editor\" style=\"max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;\">\n            <form data-ws-form=\"rename_pipeline\" data-old-name=\"{}\" data-pipeline-location=\"/pipelines/{}\">\n              <label>Name<br><input name=\"name\" id=\"pipeline-title\" value=\"{}\" data-lowercase-field=\"pipeline-name\" data-testid=\"pipeline-rename-name\"></label><br><br>\n              <button type=\"submit\" data-testid=\"pipeline-rename-save\">Rename</button>\n            </form>\n          </article>\n          <button\n            type=\"button\"\n            data-testid=\"pipeline-step-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('pipeline-step-modal').showModal();\">Add Step</button>\n\n          <dialog id=\"pipeline-step-modal\">\n            <form data-ws-form=\"create_step\" data-pipeline=\"{}\">\n              <h3>Create Step</h3>\n              <label>Title<br><input name=\"title\" data-lowercase-field=\"pipeline-step-title\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('pipeline-step-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n",
+            esc_attr(&pl.name),
+            pl.name_encoded,
+            esc_attr(&pl.name),
             esc_attr(&pl.name)
         );
         if !p.pipeline_steps.is_empty() {
@@ -215,7 +211,9 @@ pub fn render_main_inner(p: &PageInput<'_>) -> String {
                     step.id
                 );
                 if !step.skills.is_empty() {
-                    o.push_str("              <ul style=\"padding-left:1.1rem;margin:0.6rem 0 0 0;\">\n");
+                    o.push_str(
+                        "              <ul style=\"padding-left:1.1rem;margin:0.6rem 0 0 0;\">\n",
+                    );
                     for att in &step.skills {
                         let _ = write!(
                             o,

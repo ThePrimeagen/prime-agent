@@ -1,32 +1,26 @@
 //! Interactive pipeline picker for `prime-agent pipelines` (ratatui + crossterm).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use std::io::stdout;
 
-/// When `names` has one entry, returns it immediately. When multiple, shows a list (TTY).
-/// `names` must be non-empty (caller checks).
+/// Shows a list picker (TTY). `names` must be non-empty (caller checks).
 pub fn pick_pipeline_interactive(names: &[String]) -> Result<String> {
     if names.is_empty() {
         bail!("pick_pipeline_interactive: empty names");
     }
-    if names.len() == 1 {
-        return Ok(names[0].clone());
-    }
 
     enable_raw_mode().context("enable terminal raw mode")?;
     let mut stdout_h = stdout();
-    execute!(
-        stdout_h,
-        EnterAlternateScreen,
-        crossterm::cursor::Hide
-    )
-    .context("enter alternate screen")?;
+    execute!(stdout_h, EnterAlternateScreen, crossterm::cursor::Hide)
+        .context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout_h);
     let mut terminal = Terminal::new(backend).context("terminal")?;
 
@@ -48,20 +42,18 @@ fn run_picker_loop(
     state: &mut ListState,
 ) -> Result<String> {
     loop {
-        terminal.draw(|f| {
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title("Select pipeline (↑/↓, Enter, q/Esc to cancel)");
-            let items: Vec<ListItem> = names
-                .iter()
-                .map(|n| ListItem::new(n.clone()))
-                .collect();
-            let list = List::new(items)
-                .block(block)
-                .highlight_style(Style::default().bold().fg(Color::Cyan));
-            f.render_stateful_widget(list, f.area(), state);
-        })
-        .context("draw picker")?;
+        terminal
+            .draw(|f| {
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title("Select pipeline (↑/↓, Enter, q/Esc to cancel)");
+                let items: Vec<ListItem> = names.iter().map(|n| ListItem::new(n.clone())).collect();
+                let list = List::new(items)
+                    .block(block)
+                    .highlight_style(Style::default().bold().fg(Color::Cyan));
+                f.render_stateful_widget(list, f.area(), state);
+            })
+            .context("draw picker")?;
 
         let Event::Key(key) = event::read().context("read keyboard")? else {
             continue;

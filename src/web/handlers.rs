@@ -1,15 +1,15 @@
 //! HTTP handlers + WebSocket mutations.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{any, get},
-    Router,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -25,8 +25,8 @@ use crate::live_reload::FsSuppress;
 use crate::pipeline_store::PipelineStore;
 use crate::skills_store::SkillsStore;
 use crate::web::render::{
-    join_skill_names, pipeline_vm, render_page, skill_vm, step_skill_vm, step_vm, PageInput,
-    PipelineStepVm, PipelineVm, SkillVm,
+    PageInput, PipelineStepVm, PipelineVm, SkillVm, join_skill_names, pipeline_vm, render_page,
+    skill_vm, step_skill_vm, step_vm,
 };
 use crate::web::ws_protocol::{AckMsg, ClientOp, UiBroadcast};
 
@@ -91,7 +91,11 @@ fn page_context(
     let pipelines: Vec<PipelineVm> = pipeline_names.iter().map(|n| pipeline_vm(n)).collect();
 
     let selected_pipeline = if let Some(name) = selected_pipeline_name {
-        state.pipelines.get_pipeline_meta(name).ok().map(|m| pipeline_vm(&m.name))
+        state
+            .pipelines
+            .get_pipeline_meta(name)
+            .ok()
+            .map(|m| pipeline_vm(&m.name))
     } else {
         None
     };
@@ -196,8 +200,21 @@ fn suppress_skill_file(state: &AppState, name: &str) {
 }
 
 fn suppress_pipeline_file(state: &AppState, name: &str) {
-    let path = state.data_dir.join("pipelines").join(name).join("pipeline.json");
-    state.fs_suppress.mark_path(&path, Duration::from_millis(900));
+    let path = state
+        .data_dir
+        .join("pipelines")
+        .join(name)
+        .join("pipeline.json");
+    state
+        .fs_suppress
+        .mark_path(&path, Duration::from_millis(900));
+}
+
+fn suppress_pipeline_dir(state: &AppState, name: &str) {
+    state.fs_suppress.mark_path(
+        &state.data_dir.join("pipelines").join(name),
+        Duration::from_millis(900),
+    );
 }
 
 fn suppress_skill_dir(state: &AppState, name: &str) {
@@ -319,10 +336,7 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
                 if let Err(e) = state.skills.rename_skill_directory(&old_name, &new_name) {
                     return ack_err(&id, &format!("{e:#}"));
                 }
-                if let Err(e) = state
-                    .pipelines
-                    .rename_skill_reference(&old_name, &new_name)
-                {
+                if let Err(e) = state.pipelines.rename_skill_reference(&old_name, &new_name) {
                     return ack_err(&id, &format!("{e:#}"));
                 }
             }
@@ -338,11 +352,11 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
                     .expect("generations lock")
                     .record_skill_write(&new_name, &prompt);
             } else {
-                state.generations.lock().expect("generations lock").record_skill_rename(
-                    &old_name,
-                    &new_name,
-                    &prompt,
-                );
+                state
+                    .generations
+                    .lock()
+                    .expect("generations lock")
+                    .record_skill_rename(&old_name, &new_name, &prompt);
                 if let Err(e) = record_pipelines_after_skill_reference_changes(state) {
                     return ack_err(&id, &format!("{e:#}"));
                 }
@@ -365,7 +379,11 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
                 return ack_err(&id, &format!("{e:#}"));
             }
             state.skill_activity.mark_mutation();
-            state.generations.lock().expect("generations lock").record_skill_delete(&name);
+            state
+                .generations
+                .lock()
+                .expect("generations lock")
+                .record_skill_delete(&name);
             if let Err(e) = record_pipelines_after_skill_reference_changes(state) {
                 return ack_err(&id, &format!("{e:#}"));
             }
@@ -400,6 +418,46 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
                 return ack_err(&id, "broadcast failed");
             }
             let loc = format!("/pipelines/{}", urlencoding::encode(&name));
+            ack_ok(&id, Some(loc))
+        }
+        ClientOp::RenamePipeline {
+            id,
+            old_name,
+            new_name,
+        } => {
+            let old_name = old_name.trim().to_string();
+            let new_name = new_name.trim().to_string();
+            suppress_pipeline_dir(state, &old_name);
+            suppress_pipeline_dir(state, &new_name);
+            if let Err(e) = state.pipelines.rename_pipeline(&old_name, &new_name) {
+                let msg = e.to_string();
+                if msg.contains("not found") {
+                    return ack_err(&id, "not found");
+                }
+                if msg.contains("already exists") {
+                    return ack_err(&id, "pipeline exists");
+                }
+                if msg.contains("unchanged") {
+                    return ack_err(&id, "name unchanged");
+                }
+                if msg.contains(crate::pipeline_store::NAME_RULE_MESSAGE) {
+                    return ack_err(&id, crate::pipeline_store::NAME_RULE_MESSAGE);
+                }
+                return ack_err(&id, &format!("{e:#}"));
+            }
+            let raw = match std::fs::read_to_string(state.pipelines.pipeline_json_path(&new_name)) {
+                Ok(r) => r,
+                Err(e) => return ack_err(&id, &format!("{e:#}")),
+            };
+            state
+                .generations
+                .lock()
+                .expect("generations lock")
+                .record_pipeline_rename(&old_name, &new_name, &raw);
+            if broadcast_ui(state, "pipelines", None, Some(&new_name)).is_err() {
+                return ack_err(&id, "broadcast failed");
+            }
+            let loc = format!("/pipelines/{}", urlencoding::encode(&new_name));
             ack_ok(&id, Some(loc))
         }
         ClientOp::CreateStep {
@@ -525,7 +583,10 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             }
             let exists = state.skills.skill_exists(&skill_name);
             suppress_pipeline_file(state, &pipeline);
-            match state.pipelines.add_step_skill(&pipeline, step_id, &skill_name, || exists) {
+            match state
+                .pipelines
+                .add_step_skill(&pipeline, step_id, &skill_name, || exists)
+            {
                 Ok(()) => {
                     if let Err(e) = record_pipeline_mutation(state, &pipeline) {
                         return ack_err(&id, &format!("{e:#}"));
@@ -664,9 +725,7 @@ async fn get_pipeline_step_path(
 
 async fn get_counter(State(state): State<AppState>) -> Result<Html<String>, Response> {
     let n = counter::increment_and_get(&state.counter_path).map_err(|e| internal(&e))?;
-    Ok(Html(format!(
-        "<div id=\"counter\">hello world {n}</div>"
-    )))
+    Ok(Html(format!("<div id=\"counter\">hello world {n}</div>")))
 }
 
 async fn ws_live(

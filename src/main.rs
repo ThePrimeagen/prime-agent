@@ -1,11 +1,11 @@
 #![deny(warnings)]
 #![warn(clippy::all, clippy::pedantic)]
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use std::collections::HashMap;
 use std::env;
-use std::io::{stdin, stdout, BufRead, IsTerminal, Write};
+use std::io::{BufRead, IsTerminal, Write, stdin, stdout};
 use std::path::{Path, PathBuf};
 
 mod agents_md;
@@ -18,11 +18,9 @@ mod generation;
 mod idle_commit;
 mod live_reload;
 mod pipeline_pick;
+mod pipeline_progress;
 mod pipeline_run;
-mod pipeline_tui;
-mod pipeline_ui_state;
 mod pipeline_store;
-mod stdout_tail;
 mod serve;
 mod skills_store;
 mod sync;
@@ -49,15 +47,28 @@ fn main() -> Result<()> {
 
     if let Command::Serve { bind } = &cli.command {
         let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
-        let bind = bind
-            .clone()
-            .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        let bind = bind.clone().unwrap_or_else(|| "127.0.0.1:8080".to_string());
         serve::run_blocking(data_dir, bind)?;
         return Ok(());
     }
 
-    if let Command::Pipelines { action } = &cli.command {
-        run_pipelines_command(&cli, &overrides, action.as_ref())?;
+    if let Command::Pipelines {
+        pipeline,
+        prompt,
+        file,
+        no_tui,
+        action,
+    } = &cli.command
+    {
+        run_pipelines_command(
+            &cli,
+            &overrides,
+            pipeline.as_deref(),
+            prompt.as_deref(),
+            file.as_ref(),
+            *no_tui,
+            action.as_ref(),
+        )?;
         return Ok(());
     }
 
@@ -125,16 +136,24 @@ fn main() -> Result<()> {
 fn run_pipelines_command(
     cli: &Cli,
     overrides: &HashMap<String, String>,
+    pipeline_flag: Option<&str>,
+    prompt_flag: Option<&str>,
+    file_flag: Option<&PathBuf>,
+    _no_tui_flag: bool,
     action: Option<&PipelinesAction>,
 ) -> Result<()> {
     match action {
-        None => run_pipelines_default(cli, overrides),
         Some(PipelinesAction::Run {
             name,
             prompt,
             file,
-            no_tui,
+            no_tui: _,
         }) => {
+            if pipeline_flag.is_some() {
+                return Err(anyhow!(
+                    "do not combine `pipelines run` with --pipeline; use `pipelines run <name>` or `pipelines --pipeline <name>` without the run subcommand"
+                ));
+            }
             let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
             let skills_dir = resolve_skills_dir(cli, overrides)?;
             let dot_path = std::env::current_dir()
@@ -157,14 +176,7 @@ fn run_pipelines_command(
             };
             let skills_store = SkillsStore::new(skills_dir);
             let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
-            let no_tui_env = env::var("PRIME_AGENT_NO_TUI")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            let use_tui = !*no_tui && !no_tui_env && stdout().is_terminal();
-            let options = PipelineRunOptions {
-                use_tui,
-                stdout_lines: dot.stdout_lines,
-            };
+            let options = PipelineRunOptions { debug: cli.debug };
             crate::pipeline_run::run(
                 name,
                 &user_text,
@@ -176,10 +188,52 @@ fn run_pipelines_command(
             )?;
             Ok(())
         }
+        None => {
+            if let Some(pname) = pipeline_flag {
+                let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+                let skills_dir = resolve_skills_dir(cli, overrides)?;
+                let dot_path = std::env::current_dir()
+                    .context("current_dir for .prime-agent/config.json")?
+                    .join(".prime-agent")
+                    .join("config.json");
+                let dot = crate::dot_prime_agent_config::load(&dot_path)?;
+                let user_text = match (prompt_flag, file_flag) {
+                    (Some(p), None) => p.to_string(),
+                    (None, Some(f)) => std::fs::read_to_string(f)
+                        .with_context(|| format!("read user prompt file '{}'", f.display()))?,
+                    (None, None) => {
+                        return Err(anyhow!(
+                            "with --pipeline, provide exactly one of --prompt or --file"
+                        ));
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow!("use only one of --prompt or --file, not both"));
+                    }
+                };
+                let skills_store = SkillsStore::new(skills_dir);
+                let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
+                let options = PipelineRunOptions { debug: cli.debug };
+                crate::pipeline_run::run(
+                    pname,
+                    &user_text,
+                    &data_dir,
+                    &skills_store,
+                    &dot,
+                    &cwd,
+                    options,
+                )?;
+                Ok(())
+            } else {
+                run_pipelines_default(cli, overrides)
+            }
+        }
     }
 }
 
 fn run_pipelines_default(cli: &Cli, overrides: &HashMap<String, String>) -> Result<()> {
+    let Command::Pipelines { .. } = &cli.command else {
+        unreachable!("run_pipelines_default only for pipelines command");
+    };
     let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
     let store = PipelineStore::new(&data_dir);
     let names = store.list_pipeline_names()?;
@@ -202,15 +256,8 @@ fn run_pipelines_default(cli: &Cli, overrides: &HashMap<String, String>) -> Resu
     let skills_dir = resolve_skills_dir(cli, overrides)?;
     let skills_store = SkillsStore::new(skills_dir);
     let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
-    let no_tui_env = env::var("PRIME_AGENT_NO_TUI")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let use_tui = !no_tui_env && stdout().is_terminal();
     let user_text = read_user_prompt_line()?;
-    let options = PipelineRunOptions {
-        use_tui,
-        stdout_lines: dot.stdout_lines,
-    };
+    let options = PipelineRunOptions { debug: cli.debug };
     crate::pipeline_run::run(
         &pipeline_name,
         &user_text,
@@ -332,28 +379,12 @@ fn handle_config_command(action: Option<&ConfigAction>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_skills_dir(
-    cli: &Cli,
-    overrides: &HashMap<String, String>,
-) -> Result<PathBuf> {
+fn resolve_skills_dir(cli: &Cli, overrides: &HashMap<String, String>) -> Result<PathBuf> {
     if let Some(path) = overrides.get("skills-dir").map(PathBuf::from) {
         return Ok(path);
     }
     if let Some(path) = cli.skills_dir.clone() {
         return Ok(expand_path(&path));
-    }
-    if let Ok(env_path) = env::var("PRIME_AGENT_SKILLS_DIR") {
-        return Ok(expand_path(Path::new(&env_path)));
-    }
-    let config_path = config::config_path()?;
-    let mut config = if config_path.exists() {
-        Config::load_required(&config_path)?
-    } else {
-        Config::default()
-    };
-    config.apply_overrides(overrides);
-    if let Some(dir) = config.skills_dir() {
-        return Ok(dir);
     }
     let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
     Ok(data_dir.join("skills"))
@@ -363,7 +394,9 @@ fn parse_config_overrides(values: &[String]) -> Result<HashMap<String, String>> 
     let mut overrides = HashMap::new();
     for value in values {
         let Some((key, raw_value)) = value.split_once(':') else {
-            return Err(anyhow!("invalid --config value '{value}', expected key:value"));
+            return Err(anyhow!(
+                "invalid --config value '{value}', expected key:value"
+            ));
         };
         if key.trim().is_empty() {
             return Err(anyhow!("invalid --config value '{value}', empty key"));

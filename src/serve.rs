@@ -9,10 +9,10 @@ use tokio::net::TcpListener;
 use std::sync::Arc;
 
 use crate::generation::new_registry_mutex;
-use crate::idle_commit::{spawn_idle_commit_task, SkillActivity};
+use crate::idle_commit::{SkillActivity, spawn_idle_commit_task};
 use crate::pipeline_store::PipelineStore;
 use crate::skills_store::SkillsStore;
-use crate::web::handlers::{broadcast_fs_changed, build_router, AppState};
+use crate::web::handlers::{AppState, broadcast_fs_changed, build_router};
 
 pub fn run_blocking(data_dir: PathBuf, bind: String) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("tokio runtime")?;
@@ -50,24 +50,28 @@ async fn run(data_dir: PathBuf, bind: String) -> Result<()> {
     if live_reload_enabled {
         let s = state.clone();
         let fs_suppress_for_watcher = s.fs_suppress.clone();
-        crate::live_reload::spawn_fs_watcher(data_dir.clone(), &fs_suppress_for_watcher, move || {
-            let _ = broadcast_fs_changed(&s);
-        });
+        crate::live_reload::spawn_fs_watcher(
+            data_dir.clone(),
+            &fs_suppress_for_watcher,
+            move || {
+                let _ = broadcast_fs_changed(&s);
+            },
+        );
     }
 
     spawn_idle_commit_task(data_dir.clone(), skill_activity);
 
     let app = build_router(state, static_root);
 
-    let addr: SocketAddr = bind.parse().with_context(|| format!("parse bind address {bind:?}"))?;
+    let addr: SocketAddr = bind
+        .parse()
+        .with_context(|| format!("parse bind address {bind:?}"))?;
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
     let local = listener.local_addr().context("local_addr")?;
     println!("listening on http://{local}");
-    axum::serve(listener, app)
-        .await
-        .context("server")?;
+    axum::serve(listener, app).await.context("server")?;
     Ok(())
 }
 
@@ -78,7 +82,7 @@ fn ensure_dot_prime_agent_config() -> Result<()> {
     if !path.exists() {
         fs::write(
             &path,
-            "{\n  \"model\": null,\n  \"clirunner\": null,\n  \"stdout_lines\": 3\n}\n",
+            "{\n  \"model\": null,\n  \"clirunner\": null,\n  \"stdout_lines\": 3,\n  \"yolo\": true\n}\n",
         )
         .context("write .prime-agent/config.json")?;
     }

@@ -125,6 +125,15 @@ impl GenerationRegistry {
         self.list_epoch += 1;
     }
 
+    pub fn record_pipeline_rename(&mut self, old: &str, new: &str, raw: &str) {
+        self.pipelines.remove(old);
+        self.pipeline_hash.remove(old);
+        *self.pipelines.entry(new.to_string()).or_insert(0) += 1;
+        self.pipeline_hash
+            .insert(new.to_string(), hash_bytes(raw.as_bytes()));
+        self.list_epoch += 1;
+    }
+
     /// Bump pipeline generation only when `pipeline.json` content differs from the last hash.
     pub fn reconcile_pipeline_file_content(&mut self, name: &str, raw: &str) {
         let h = hash_bytes(raw.as_bytes());
@@ -138,7 +147,11 @@ impl GenerationRegistry {
     }
 
     /// Re-read disk; bump generations only when file content differs from last known hash.
-    pub fn reconcile_from_disk(&mut self, skills: &SkillsStore, pipelines: &PipelineStore) -> Result<bool> {
+    pub fn reconcile_from_disk(
+        &mut self,
+        skills: &SkillsStore,
+        pipelines: &PipelineStore,
+    ) -> Result<bool> {
         let mut changed = false;
         let disk_skills = skills.list_skill_names()?;
         let disk_pipelines = pipelines.list_pipeline_names()?;
@@ -217,9 +230,9 @@ pub fn new_registry_mutex(
     skills: &SkillsStore,
     pipelines: &PipelineStore,
 ) -> Result<Arc<Mutex<GenerationRegistry>>> {
-    Ok(Arc::new(Mutex::new(GenerationRegistry::bootstrap_from_disk(
-        skills, pipelines,
-    )?)))
+    Ok(Arc::new(Mutex::new(
+        GenerationRegistry::bootstrap_from_disk(skills, pipelines)?,
+    )))
 }
 
 #[cfg(test)]

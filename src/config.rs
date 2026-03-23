@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
@@ -42,17 +42,11 @@ impl Config {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create '{}'", parent.display()))?;
         }
-        let serialized = serde_json::to_string_pretty(self)
-            .context("failed to serialize config")?;
+        let serialized =
+            serde_json::to_string_pretty(self).context("failed to serialize config")?;
         fs::write(path, format!("{serialized}\n"))
             .with_context(|| format!("failed to write config '{}'", path.display()))?;
         Ok(())
-    }
-
-    pub fn skills_dir(&self) -> Option<PathBuf> {
-        self.skills_dir
-            .clone()
-            .map(|path| expand_path(&path))
     }
 
     pub fn set_value(&mut self, name: &str, value: &str) {
@@ -65,7 +59,10 @@ impl Config {
 
     pub fn get_value(&self, name: &str) -> Option<String> {
         if name == "skills-dir" {
-            return self.skills_dir.as_ref().map(|path| path.display().to_string());
+            return self
+                .skills_dir
+                .as_ref()
+                .map(|path| path.display().to_string());
         }
         self.values.get(name).cloned()
     }
@@ -79,12 +76,6 @@ impl Config {
             values.insert(key.clone(), value.clone());
         }
         values
-    }
-
-    pub fn apply_overrides(&mut self, overrides: &HashMap<String, String>) {
-        for (key, value) in overrides {
-            self.set_value(key, value);
-        }
     }
 }
 
@@ -134,4 +125,3 @@ fn expand_path(path: &Path) -> PathBuf {
     }
     path.to_path_buf()
 }
-

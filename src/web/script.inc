@@ -1,4 +1,6 @@
       const autosaveState = new Map();
+      const pipelineRenameFormState = new Map();
+      const pipelineStepFormState = new Map();
       let primeSocket = null;
       const primeWsQueue = [];
 
@@ -327,15 +329,77 @@
         }
       }
 
-      function capturePipelineStepEditorFocusState() {
+      function capturePipelineRenameFocusState() {
         const ae = document.activeElement;
-        if (!ae || !ae.matches || !ae.closest("[data-testid='pipeline-step-editor']")) {
+        if (
+          !ae ||
+          !ae.matches ||
+          !(ae.matches("#pipeline-title") || ae.matches("[data-testid='pipeline-rename-name']"))
+        ) {
           return null;
         }
-        const article = ae.closest("[data-testid='pipeline-step-editor']");
-        const form =
-          article && article.querySelector("form[data-ws-form='update_step']");
-        if (!form) {
+        if (!(ae instanceof HTMLInputElement)) {
+          return null;
+        }
+        let start = 0;
+        let end = 0;
+        if (typeof ae.selectionStart === "number") {
+          start = ae.selectionStart;
+        }
+        if (typeof ae.selectionEnd === "number") {
+          end = ae.selectionEnd;
+        }
+        return {
+          kind: "pipelineRename",
+          selectionStart: start,
+          selectionEnd: end,
+          draftValue: ae.value
+        };
+      }
+
+      function restorePipelineRenameFocusState(state) {
+        if (!state || state.kind !== "pipelineRename") {
+          return;
+        }
+        const el =
+          document.getElementById("pipeline-title") ||
+          document.querySelector("[data-testid='pipeline-rename-name']");
+        if (!el || !(el instanceof HTMLInputElement)) {
+          return;
+        }
+        if (typeof state.draftValue === "string") {
+          el.value = state.draftValue;
+          normalizeLowercaseField(el);
+        }
+        primeFocusNoScroll(el);
+        try {
+          if (
+            typeof state.selectionStart === "number" &&
+            typeof state.selectionEnd === "number"
+          ) {
+            el.setSelectionRange(state.selectionStart, state.selectionEnd);
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+
+      function resyncPipelineRenameAutosaveBaseline() {
+        document.querySelectorAll("form[data-ws-form='rename_pipeline']").forEach((form) => {
+          const p = buildPipelineRenamePayload(form);
+          if (p !== null) {
+            getPipelineRenameFormState(form).lastSentPayload = p;
+          }
+        });
+      }
+
+      function capturePipelineStepEditorFocusState() {
+        const ae = document.activeElement;
+        if (!ae || !ae.matches) {
+          return null;
+        }
+        const form = ae.closest("form[data-ws-form='update_step']");
+        if (!form || !form.closest("[data-testid='pipeline-step-editor']")) {
           return null;
         }
         const pipeline = form.getAttribute("data-pipeline") || "";
@@ -354,7 +418,8 @@
             pipeline: pipeline,
             stepId: stepId,
             selectionStart: start,
-            selectionEnd: end
+            selectionEnd: end,
+            draftValue: ae.value
           };
         }
         if (
@@ -376,6 +441,26 @@
             scrollTop: ae.scrollTop,
             scrollLeft: ae.scrollLeft
           };
+        }
+        if (ae.matches("button[type='submit'], input[type='submit']")) {
+          const ta = form.querySelector("textarea[name='prompt']");
+          if (ta && ta instanceof HTMLTextAreaElement) {
+            if (typeof ta.selectionStart === "number") {
+              start = ta.selectionStart;
+            }
+            if (typeof ta.selectionEnd === "number") {
+              end = ta.selectionEnd;
+            }
+            return {
+              kind: "pipelinePrompt",
+              pipeline: pipeline,
+              stepId: stepId,
+              selectionStart: start,
+              selectionEnd: end,
+              scrollTop: ta.scrollTop,
+              scrollLeft: ta.scrollLeft
+            };
+          }
         }
         return null;
       }
@@ -403,6 +488,14 @@
         ) {
           return;
         }
+        if (
+          state.kind === "pipelineTitle" &&
+          el instanceof HTMLInputElement &&
+          typeof state.draftValue === "string"
+        ) {
+          el.value = state.draftValue;
+          normalizeLowercaseField(el);
+        }
         primeFocusNoScroll(el);
         try {
           if (
@@ -418,12 +511,22 @@
           state.kind === "pipelinePrompt" &&
           el instanceof HTMLTextAreaElement
         ) {
-          if (typeof state.scrollTop === "number") {
-            el.scrollTop = state.scrollTop;
-          }
-          if (typeof state.scrollLeft === "number") {
-            el.scrollLeft = state.scrollLeft;
-          }
+          const st =
+            typeof state.scrollTop === "number" ? state.scrollTop : null;
+          const sl =
+            typeof state.scrollLeft === "number" ? state.scrollLeft : null;
+          const applyScroll = () => {
+            if (st !== null) {
+              el.scrollTop = st;
+            }
+            if (sl !== null) {
+              el.scrollLeft = sl;
+            }
+          };
+          applyScroll();
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(applyScroll);
+          });
         }
       }
 
@@ -670,9 +773,13 @@
         if (selPipe) {
           const pl = selPipe;
           o +=
-            '          <h1 id="pipeline-title">' +
-            primeEscHtml(pl.name) +
-            '</h1>\n          <button\n            type="button"\n            data-testid="pipeline-step-create-open"\n            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"\n            onclick="document.getElementById(\'pipeline-step-modal\').showModal();">Add Step</button>\n\n          <dialog id="pipeline-step-modal">\n            <form data-ws-form="create_step" data-pipeline="' +
+            '          <article data-testid="pipeline-editor" style="max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;">\n            <form data-ws-form="rename_pipeline" data-old-name="' +
+            primeEscAttr(pl.name) +
+            '" data-pipeline-location="/pipelines/' +
+            pl.name_encoded +
+            '">\n              <label>Name<br><input name="name" id="pipeline-title" value="' +
+            primeEscAttr(pl.name) +
+            '" data-lowercase-field="pipeline-name" data-testid="pipeline-rename-name"></label><br><br>\n              <button type="submit" data-testid="pipeline-rename-save">Rename</button>\n            </form>\n          </article>\n          <button\n            type="button"\n            data-testid="pipeline-step-create-open"\n            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"\n            onclick="document.getElementById(\'pipeline-step-modal\').showModal();">Add Step</button>\n\n          <dialog id="pipeline-step-modal">\n            <form data-ws-form="create_step" data-pipeline="' +
             primeEscAttr(pl.name) +
             '">\n              <h3>Create Step</h3>\n              <label>Title<br><input name="title" data-lowercase-field="pipeline-step-title" required></label><br><br>\n              <label>Prompt<br><textarea name="prompt" rows="6" cols="40" required></textarea></label><br><br>\n              <button type="submit">Save</button>\n              <button type="button" onclick="document.getElementById(\'pipeline-step-modal\').close();">Cancel</button>\n            </form>\n          </dialog>\n\n';
           if (steps.length > 0) {
@@ -745,6 +852,7 @@
       function applyUiBroadcast(data) {
         const shellScroll = captureShellScrollState();
         const skillFocus = captureSkillEditorFocusState();
+        const pipelineRenameFocus = capturePipelineRenameFocusState();
         const pipelineFocus = capturePipelineStepEditorFocusState();
         syncLastViewedFromUi(data);
         const nav = document.getElementById("left-nav");
@@ -766,13 +874,17 @@
         wireAll();
         restoreShellScrollState(shellScroll);
         restoreSkillEditorFocusState(skillFocus);
+        restorePipelineRenameFocusState(pipelineRenameFocus);
+        resyncPipelineRenameAutosaveBaseline();
         restorePipelineStepEditorFocusState(pipelineFocus);
+        resyncPipelineStepAutosaveBaseline();
       }
 
       async function applyFsRefresh() {
         try {
           const shellScroll = captureShellScrollState();
           const skillFocus = captureSkillEditorFocusState();
+          const pipelineRenameFocus = capturePipelineRenameFocusState();
           const pipelineFocus = capturePipelineStepEditorFocusState();
           const r = await fetch(location.href, {
             cache: "no-store",
@@ -797,7 +909,10 @@
           wireAll();
           restoreShellScrollState(shellScroll);
           restoreSkillEditorFocusState(skillFocus);
+          restorePipelineRenameFocusState(pipelineRenameFocus);
+          resyncPipelineRenameAutosaveBaseline();
           restorePipelineStepEditorFocusState(pipelineFocus);
+          resyncPipelineStepAutosaveBaseline();
         } catch (_e) {
           /* ignore */
         }
@@ -831,7 +946,11 @@
         }
         if (Object.prototype.hasOwnProperty.call(data, "ok") && data.id) {
           if (!finishPipelineCreatePending(data.id, data.ok === true, data.error)) {
-            finishSkillAutosavePending(data.id, data.ok === true);
+            if (!finishPipelineRenameAutosavePending(data.id, data.ok === true)) {
+              if (!finishPipelineStepAutosavePending(data.id, data.ok === true)) {
+                finishSkillAutosavePending(data.id, data.ok === true);
+              }
+            }
           }
           /* UI sync comes from broadcast */
         }
@@ -933,6 +1052,226 @@
         return true;
       }
 
+      function getPipelineRenameFormState(form) {
+        const key = form.getAttribute("data-old-name") || "";
+        if (!pipelineRenameFormState.has(key)) {
+          pipelineRenameFormState.set(key, {
+            inFlight: false,
+            lastSentPayload: ""
+          });
+        }
+        return pipelineRenameFormState.get(key);
+      }
+
+      function primePipelineRenamePendingMap() {
+        if (!window.__primePipelineRenameAckPending) {
+          window.__primePipelineRenameAckPending = new Map();
+        }
+        return window.__primePipelineRenameAckPending;
+      }
+
+      function buildPipelineRenamePayload(form) {
+        const oldName = form.getAttribute("data-old-name") || "";
+        const input = form.querySelector("input[name='name']");
+        if (!input) {
+          return null;
+        }
+        return oldName + "|" + input.value.trim();
+      }
+
+      function finishPipelineRenameAutosavePending(msgId, ok) {
+        const pendingMap = primePipelineRenamePendingMap();
+        const pending = pendingMap.get(msgId);
+        if (!pending) {
+          return false;
+        }
+        pendingMap.delete(msgId);
+        if (pending.timeoutId) {
+          window.clearTimeout(pending.timeoutId);
+        }
+        const st = pipelineRenameFormState.get(pending.formKey);
+        if (st) {
+          st.inFlight = false;
+          if (ok) {
+            st.lastSentPayload = pending.payload;
+          }
+        }
+        return true;
+      }
+
+      function buildUpdateStepPayload(form) {
+        const titleInput = form.querySelector("input[name='title']");
+        const promptInput = form.querySelector("textarea[name='prompt']");
+        if (!titleInput || !promptInput) {
+          return null;
+        }
+        const payload = new URLSearchParams();
+        payload.set("title", titleInput.value);
+        payload.set("prompt", promptInput.value);
+        return payload.toString();
+      }
+
+      function getPipelineStepFormState(form) {
+        const pipeline = form.getAttribute("data-pipeline") || "";
+        const stepId = form.getAttribute("data-step-id") || "";
+        const key = pipeline + "|" + stepId;
+        if (!pipelineStepFormState.has(key)) {
+          pipelineStepFormState.set(key, {
+            inFlight: false,
+            lastSentPayload: ""
+          });
+        }
+        return pipelineStepFormState.get(key);
+      }
+
+      function primePipelineStepPendingMap() {
+        if (!window.__primePipelineStepAckPending) {
+          window.__primePipelineStepAckPending = new Map();
+        }
+        return window.__primePipelineStepAckPending;
+      }
+
+      function finishPipelineStepAutosavePending(msgId, ok) {
+        const pendingMap = primePipelineStepPendingMap();
+        const pending = pendingMap.get(msgId);
+        if (!pending) {
+          return false;
+        }
+        pendingMap.delete(msgId);
+        if (pending.timeoutId) {
+          window.clearTimeout(pending.timeoutId);
+        }
+        const st = pipelineStepFormState.get(pending.formKey);
+        if (st) {
+          st.inFlight = false;
+          if (ok) {
+            st.lastSentPayload = pending.payload;
+          }
+        }
+        return true;
+      }
+
+      function resyncPipelineStepAutosaveBaseline() {
+        document.querySelectorAll("form[data-ws-form='update_step']").forEach((form) => {
+          const p = buildUpdateStepPayload(form);
+          if (p !== null) {
+            getPipelineStepFormState(form).lastSentPayload = p;
+          }
+        });
+      }
+
+      function savePipelineStepForm(form) {
+        const st = getPipelineStepFormState(form);
+        if (st.inFlight) {
+          return;
+        }
+        const titleInput = form.querySelector("input[name='title']");
+        const promptInput = form.querySelector("textarea[name='prompt']");
+        if (!titleInput || !promptInput) {
+          return;
+        }
+        if (titleInput.value.trim() === "") {
+          return;
+        }
+        if (promptInput.value.trim() === "") {
+          return;
+        }
+        const payload = buildUpdateStepPayload(form);
+        if (payload === null) {
+          return;
+        }
+        if (payload === st.lastSentPayload) {
+          return;
+        }
+        st.inFlight = true;
+        try {
+          const msgId = nextMsgId();
+          const pipeline = form.getAttribute("data-pipeline") || "";
+          const stepId = parseInt(form.getAttribute("data-step-id") || "0", 10);
+          const afterPayload = buildUpdateStepPayload(form);
+          if (afterPayload === null) {
+            st.inFlight = false;
+            return;
+          }
+          const pendingMap = primePipelineStepPendingMap();
+          const timeoutId = window.setTimeout(() => {
+            if (pendingMap.has(msgId)) {
+              finishPipelineStepAutosavePending(msgId, false);
+            }
+          }, 2500);
+          const formKey = pipeline + "|" + String(stepId);
+          pendingMap.set(msgId, {
+            formKey: formKey,
+            payload: afterPayload,
+            timeoutId: timeoutId
+          });
+          sendPrime({
+            op: "update_step",
+            id: msgId,
+            pipeline: pipeline,
+            step_id: stepId,
+            title: titleInput.value,
+            prompt: promptInput.value
+          });
+        } catch (_error) {
+          st.inFlight = false;
+        }
+      }
+
+      function savePipelineRenameForm(form) {
+        const st = getPipelineRenameFormState(form);
+        if (st.inFlight) {
+          return;
+        }
+        const input = form.querySelector("input[name='name']");
+        if (!input) {
+          return;
+        }
+        const oldName = form.getAttribute("data-old-name") || "";
+        const trimmed = input.value.trim();
+        if (trimmed === "") {
+          return;
+        }
+        if (trimmed === oldName.trim()) {
+          return;
+        }
+        const payload = buildPipelineRenamePayload(form);
+        if (payload === null) {
+          return;
+        }
+        if (payload === st.lastSentPayload) {
+          return;
+        }
+        st.inFlight = true;
+        try {
+          const msgId = nextMsgId();
+          const afterPayload = buildPipelineRenamePayload(form);
+          if (afterPayload === null) {
+            st.inFlight = false;
+            return;
+          }
+          const pendingMap = primePipelineRenamePendingMap();
+          const timeoutId = window.setTimeout(() => {
+            if (pendingMap.has(msgId)) {
+              finishPipelineRenameAutosavePending(msgId, false);
+            }
+          }, 2500);
+          pendingMap.set(msgId, {
+            formKey: oldName,
+            payload: afterPayload,
+            timeoutId
+          });
+          sendPrime({
+            op: "rename_pipeline",
+            id: msgId,
+            old_name: oldName,
+            new_name: trimmed
+          });
+        } catch (_error) {
+          st.inFlight = false;
+        }
+      }
+
       function saveEditor(editor) {
         const state = getEditorState(editor);
         if (state.inFlight) {
@@ -1002,6 +1341,18 @@
             getEditorState(editor).lastSentPayload = initial;
           }
         });
+        document.querySelectorAll("form[data-ws-form='rename_pipeline']").forEach((form) => {
+          const initial = buildPipelineRenamePayload(form);
+          if (initial !== null) {
+            getPipelineRenameFormState(form).lastSentPayload = initial;
+          }
+        });
+        document.querySelectorAll("form[data-ws-form='update_step']").forEach((form) => {
+          const initial = buildUpdateStepPayload(form);
+          if (initial !== null) {
+            getPipelineStepFormState(form).lastSentPayload = initial;
+          }
+        });
         if (!window.__primeAutosaveInterval) {
           window.__primeAutosaveInterval = window.setInterval(() => {
             document.querySelectorAll("[data-skill-editor]").forEach((editor) => {
@@ -1021,6 +1372,49 @@
                 return;
               }
               saveEditor(editor);
+            });
+            document.querySelectorAll("form[data-ws-form='rename_pipeline']").forEach((form) => {
+              const p = buildPipelineRenamePayload(form);
+              if (p === null) {
+                return;
+              }
+              const st = getPipelineRenameFormState(form);
+              if (st.inFlight) {
+                return;
+              }
+              const nameInput = form.querySelector("input[name='name']");
+              if (nameInput && nameInput.value.trim() === "") {
+                st.lastSentPayload = p;
+                return;
+              }
+              if (p === st.lastSentPayload) {
+                return;
+              }
+              savePipelineRenameForm(form);
+            });
+            document.querySelectorAll("form[data-ws-form='update_step']").forEach((form) => {
+              const p = buildUpdateStepPayload(form);
+              if (p === null) {
+                return;
+              }
+              const st = getPipelineStepFormState(form);
+              if (st.inFlight) {
+                return;
+              }
+              const titleInput = form.querySelector("input[name='title']");
+              const promptInput = form.querySelector("textarea[name='prompt']");
+              if (titleInput && titleInput.value.trim() === "") {
+                st.lastSentPayload = p;
+                return;
+              }
+              if (promptInput && promptInput.value.trim() === "") {
+                st.lastSentPayload = p;
+                return;
+              }
+              if (p === st.lastSentPayload) {
+                return;
+              }
+              savePipelineStepForm(form);
             });
           }, 1000);
         }
@@ -1180,6 +1574,21 @@
               op: "create_pipeline",
               id: id,
               name: String(fd.get("name") || "")
+            });
+            return;
+          }
+          if (ws === "rename_pipeline") {
+            const fd = new FormData(form);
+            const oldName = form.getAttribute("data-old-name") || "";
+            const newName = String(fd.get("name") || "").trim();
+            if (newName === "") {
+              return;
+            }
+            sendPrime({
+              op: "rename_pipeline",
+              id: id,
+              old_name: oldName,
+              new_name: newName
             });
             return;
           }

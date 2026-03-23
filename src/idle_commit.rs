@@ -1,8 +1,8 @@
 //! After skill edits go idle, run `cursor-agent` to commit and push the data directory.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -47,7 +47,7 @@ fn idle_commit_secs() -> u64 {
         .max(1)
 }
 
-fn load_cursor_config_for_idle() -> Option<(String, String)> {
+fn load_cursor_config_for_idle() -> Option<(String, String, bool)> {
     let path = Path::new(".prime-agent").join("config.json");
     let raw = std::fs::read_to_string(&path).ok()?;
     let v: Value = serde_json::from_str(&raw).ok()?;
@@ -56,7 +56,8 @@ fn load_cursor_config_for_idle() -> Option<(String, String)> {
     if model.is_empty() || clirunner.is_empty() {
         return None;
     }
-    Some((model, clirunner))
+    let yolo = v.get("yolo").and_then(Value::as_bool).unwrap_or(true);
+    Some((model, clirunner, yolo))
 }
 
 fn idle_commit_prompt() -> &'static str {
@@ -68,15 +69,23 @@ Do not ask for confirmation."
 }
 
 fn run_idle_commit_cursor(data_dir: &Path) -> Result<()> {
-    let Some((model, clirunner)) = load_cursor_config_for_idle() else {
+    let Some((model, clirunner, yolo)) = load_cursor_config_for_idle() else {
         return Ok(());
     };
     if clirunner != SUPPORTED_CLIRUNNER {
         return Ok(());
     }
 
-    let (_stdout, stderr, result) =
-        run_cursor_agent_streaming(&clirunner, &model, data_dir, idle_commit_prompt(), None);
+    let (_stdout, stderr, _code, result) = run_cursor_agent_streaming(
+        &clirunner,
+        &model,
+        data_dir,
+        idle_commit_prompt(),
+        None,
+        None,
+        None,
+        yolo,
+    );
     result
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!("cursor-agent: {e}; stderr={}", stderr.trim()))
@@ -91,7 +100,10 @@ pub fn spawn_idle_commit_task(data_dir: PathBuf, skill_activity: Arc<SkillActivi
             interval.tick().await;
 
             let last = {
-                let g = skill_activity.last_mutation.lock().expect("skill activity lock");
+                let g = skill_activity
+                    .last_mutation
+                    .lock()
+                    .expect("skill activity lock");
                 *g
             };
             let Some(t) = last else {

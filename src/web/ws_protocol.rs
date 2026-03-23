@@ -27,6 +27,11 @@ pub enum ClientOp {
         id: String,
         name: String,
     },
+    RenamePipeline {
+        id: String,
+        old_name: String,
+        new_name: String,
+    },
     CreateStep {
         id: String,
         pipeline: String,

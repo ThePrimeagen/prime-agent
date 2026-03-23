@@ -29,14 +29,14 @@ instructions stored as Markdown files.
 | --- | --- |
 | `model` | Model string passed to `cursor-agent --model`. |
 | `clirunner` | CLI to invoke; must be `cursor-agent` (legacy key `cli` is accepted as an alias). |
-| `stdout_lines` | In the pipeline TUI, how many trailing stdout lines to show per skill (default `3`; must be at least `1`). |
+| `stdout_lines` | Reserved for future CLI display options (parsed; default `3`; must be at least `1`). |
 
-Disable the full-screen TUI with `--no-tui` or `PRIME_AGENT_NO_TUI=1` (for CI or non-interactive runs).
+`--no-tui` and `PRIME_AGENT_NO_TUI=1` are accepted for compatibility and have no effect (pipelines run uses plain stdout progress only).
 
 ## Skills Directory
 
-- Default: `./skills`
-- Override with `--skills-dir`, `PRIME_AGENT_SKILLS_DIR`, or `--config skills-dir:<path>`.
+- Default: `<data-dir>/skills` where `<data-dir>` is `--data-dir` if passed, otherwise the current working directory (so typically `./skills`).
+- Override only with `--skills-dir` or `--config skills-dir:<path>` (no environment-variable fallbacks).
 
 ## Naming Rules
 

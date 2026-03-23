@@ -66,7 +66,7 @@ test("filesystem-only new step in pipeline.json appears in pipeline step sidebar
   );
 
   await page.goto(`/pipelines/${encodeURIComponent(name)}`);
-  await expect(page.locator("#pipeline-title")).toHaveText(name);
+  await expect(page.locator("#pipeline-title")).toHaveValue(name);
 
   const stepTitle = `fs-step-${suffix}`;
   const body = {

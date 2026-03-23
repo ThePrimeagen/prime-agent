@@ -1,6 +1,6 @@
 use crate::agents_md::{AgentSection, AgentsDoc};
 use crate::skills_store::SkillsStore;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -34,7 +34,8 @@ pub fn run_sync(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
                 let skill_content = skills_store.load_skill(&name)?;
                 let agents_content = section.content_string();
                 if normalize_content(&skill_content) != normalize_content(&agents_content) {
-                    let resolved = resolve_conflicts_interactive(&name, &skill_content, &agents_content)?;
+                    let resolved =
+                        resolve_conflicts_interactive(&name, &skill_content, &agents_content)?;
                     skills_store.save_skill(&name, &resolved)?;
                     agents_doc.upsert_section(AgentSection::from_content(name, &resolved));
                     updated = true;
@@ -150,7 +151,10 @@ fn prompt_choice() -> Result<Choice> {
 }
 
 fn normalize_content(content: &str) -> String {
-    content.replace("\r\n", "\n").trim_end_matches('\n').to_string()
+    content
+        .replace("\r\n", "\n")
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

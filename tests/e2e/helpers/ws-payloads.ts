@@ -7,6 +7,7 @@ export type WsClientPayload =
   | { op: "update_skill"; id: string; old_name: string; name: string; prompt: string }
   | { op: "delete_skill"; id: string; name: string }
   | { op: "create_pipeline"; id: string; name: string }
+  | { op: "rename_pipeline"; id: string; old_name: string; new_name: string }
   | { op: "create_step"; id: string; pipeline: string; title: string; prompt: string }
   | { op: "update_step"; id: string; pipeline: string; step_id: number; title: string; prompt: string }
   | { op: "delete_step"; id: string; pipeline: string; step_id: number }

@@ -4,7 +4,8 @@ export default defineConfig({
   testDir: "./tests/e2e",
   testIgnore: "**/live/**",
   fullyParallel: true,
-  workers: process.env.CI ? 4 : 10,
+  // Each worker spawns `cargo run serve`; many workers contend on the first compile and starve HTTP.
+  workers: 2,
   timeout: 60_000,
   expect: {
     timeout: 10_000,

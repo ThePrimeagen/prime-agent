@@ -7,6 +7,14 @@
 - Always run `cargo test`, fix any issues.
 - For each step, check `AGENTS.md` and `README.md` in the target repo for any specified test, lint, or formatting requirements and follow them.
 
+### Live Cursor pipeline integration test
+
+The Rust test `live_cursor_pipeline_three_skills_then_aggregate` in `tests/cursor_pipeline_live.rs` is `#[ignore]` by default (requires a real `cursor-agent`, auth, and network). Run when validating CLI flags and multi-stage pipelines against the actual binary:
+
+```text
+PRIME_AGENT_LIVE_CURSOR=1 cargo test cursor_pipeline_live -- --ignored --nocapture
+```
+
 ## Versioning
 
 - Bump the patch version on every change and print it on every run of `prime-agent`.

@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 #[derive(Clone, Debug)]
 pub struct AgentSection {
@@ -59,9 +59,7 @@ impl AgentsDoc {
                 let header_line = lines[index].trim_end();
                 let expected_header = format!("## {name}");
                 if header_line != expected_header {
-                    bail!(
-                        "expected header '{expected_header}', found '{header_line}'"
-                    );
+                    bail!("expected header '{expected_header}', found '{header_line}'");
                 }
                 index += 1;
                 let mut content_lines = Vec::new();
@@ -76,7 +74,10 @@ impl AgentsDoc {
                 if index >= lines.len() {
                     bail!("missing end marker for '{name}'");
                 }
-                segments.push(DocSegment::Section(AgentSection { name, content_lines }));
+                segments.push(DocSegment::Section(AgentSection {
+                    name,
+                    content_lines,
+                }));
             } else {
                 text_lines.push(line.clone());
             }

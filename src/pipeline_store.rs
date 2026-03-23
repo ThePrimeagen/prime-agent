@@ -1,6 +1,6 @@
 //! Filesystem-backed pipelines under `<data-dir>/pipelines/<name>/pipeline.json`.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -106,8 +106,8 @@ impl PipelineStore {
             return Ok(Vec::new());
         }
         let mut names = Vec::new();
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("read '{}'", self.root.display()))?
+        for entry in
+            fs::read_dir(&self.root).with_context(|| format!("read '{}'", self.root.display()))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -135,6 +135,30 @@ impl PipelineStore {
             .with_context(|| format!("create pipeline dir '{}'", dir.display()))?;
         let file = PipelineFile::default();
         self.write_file_atomic(name, &file)?;
+        Ok(())
+    }
+
+    pub fn rename_pipeline(&self, old: &str, new: &str) -> Result<()> {
+        Self::validate_kebab_name(old)?;
+        Self::validate_kebab_name(new)?;
+        if old == new {
+            return Err(anyhow!("name unchanged"));
+        }
+        let old_d = self.pipeline_dir(old);
+        let new_d = self.pipeline_dir(new);
+        if !old_d.is_dir() || !self.pipeline_file(old).exists() {
+            return Err(anyhow!("pipeline not found"));
+        }
+        if new_d.exists() {
+            return Err(anyhow!("pipeline '{new}' already exists"));
+        }
+        fs::rename(&old_d, &new_d).with_context(|| {
+            format!(
+                "rename pipeline dir '{}' -> '{}'",
+                old_d.display(),
+                new_d.display()
+            )
+        })?;
         Ok(())
     }
 
@@ -173,12 +197,7 @@ impl PipelineStore {
         file.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1
     }
 
-    pub fn create_step(
-        &self,
-        pipeline_name: &str,
-        title: &str,
-        prompt: &str,
-    ) -> Result<i64> {
+    pub fn create_step(&self, pipeline_name: &str, title: &str, prompt: &str) -> Result<i64> {
         let title = title.trim().to_lowercase();
         let prompt = prompt.to_string();
         if title.is_empty() || prompt.is_empty() {
@@ -306,8 +325,8 @@ impl PipelineStore {
         if !self.root.exists() {
             return Ok(());
         }
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("read '{}'", self.root.display()))?
+        for entry in
+            fs::read_dir(&self.root).with_context(|| format!("read '{}'", self.root.display()))?
         {
             let entry = entry?;
             let path = entry.path();

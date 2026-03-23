@@ -1,0 +1,3 @@
+I want the pipeline title to be automatically saved like the rest.  If its empty, simply dont save, but allow the ui to go to empty and them attempt to rename it to somehting different.
+
+

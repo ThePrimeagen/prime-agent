@@ -14,6 +14,7 @@ import {
   wsDeleteStep,
   wsDeleteStepSkill,
   wsReorderStep,
+  wsRenamePipeline,
   wsUpdateSkill,
   wsUpdateStep,
 } from "./helpers/ws-client";
@@ -290,14 +291,14 @@ test("last viewed pipeline opens when clicking Pipeline tab after Skills tab", a
   await createPipelineByRequest(page, pipeName);
 
   await page.goto(`/pipelines/${encodeURIComponent(pipeName)}`);
-  await expect(page.locator("#pipeline-title")).toHaveText(pipeName);
+  await expect(page.locator("#pipeline-title")).toHaveValue(pipeName);
 
   await page.getByTestId("tab-skills").click();
   await expect(page).toHaveURL(/\/skills(\/[^/]+)?$/);
 
   await page.getByTestId("tab-pipeline").click();
   await expect(page).toHaveURL(new RegExp(`/pipelines/${pipeName}$`));
-  await expect(page.locator("#pipeline-title")).toHaveText(pipeName);
+  await expect(page.locator("#pipeline-title")).toHaveValue(pipeName);
 });
 
 test("goto /skills redirects to last viewed skill when still present", async ({
@@ -345,7 +346,7 @@ test("create pipeline happy path from left nav plus button", async ({ page, e2eD
   await page.locator("dialog#pipeline-modal button[type='submit']").click();
 
   await expect(page).toHaveURL(new RegExp(`/pipelines/[a-z0-9-]+$`));
-  await expect(page.locator("#pipeline-title")).toHaveText(name);
+  await expect(page.locator("#pipeline-title")).toHaveValue(name);
   await expect(page.getByTestId("pipeline-nav-link").filter({ hasText: name })).toBeVisible();
 
   const pj = path.join(e2eDataDir, "pipelines", name, "pipeline.json");
@@ -403,7 +404,7 @@ test("pipeline name input lowercases in real time and persists lowercase", async
 
   await page.locator("dialog#pipeline-modal button[type='submit']").click();
   await expect(page).toHaveURL(new RegExp(`/pipelines/[a-z0-9-]+$`));
-  await expect(page.locator("#pipeline-title")).toHaveText(normalizedName);
+  await expect(page.locator("#pipeline-title")).toHaveValue(normalizedName);
   await expect(page.getByTestId("pipeline-nav-link").filter({ hasText: normalizedName })).toBeVisible();
 });
 
@@ -454,7 +455,7 @@ test("pipeline list renders each pipeline as clickable nav item and routes to /p
 
   await page.getByTestId("pipeline-nav-link").filter({ hasText: second }).click();
   await expect(page).toHaveURL(new RegExp(`/pipelines/${secondId}$`));
-  await expect(page.locator("#pipeline-title")).toHaveText(second);
+  await expect(page.locator("#pipeline-title")).toHaveValue(second);
 });
 
 test("create skill happy path from Skills tab", async ({ page }) => {
@@ -761,10 +762,144 @@ test("main area title updates to currently selected pipeline from /pipelines/:id
 
   await page.goto("/pipelines");
   await page.getByTestId("pipeline-nav-link").filter({ hasText: first }).click();
-  await expect(page.locator("#pipeline-title")).toHaveText(first);
+  await expect(page.locator("#pipeline-title")).toHaveValue(first);
 
   await page.getByTestId("pipeline-nav-link").filter({ hasText: second }).click();
-  await expect(page.locator("#pipeline-title")).toHaveText(second);
+  await expect(page.locator("#pipeline-title")).toHaveValue(second);
+});
+
+test("pipeline rename via WS updates URL, nav, and on-disk folder", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const oldName = `pipe-ren-old-${suffix}`;
+  const newName = `pipe-ren-new-${suffix}`;
+  await createPipelineByRequest(page, oldName);
+  const r = await wsRenamePipeline(page, oldName, newName);
+  expect(r.ok).toBe(true);
+  expect(r.location).toBe(`/pipelines/${encodeURIComponent(newName)}`);
+
+  await expect(page).toHaveURL(new RegExp(`/pipelines/${newName}$`));
+  await expect(page.locator("#pipeline-title")).toHaveValue(newName);
+  await expect(
+    page.getByTestId("pipeline-nav-link").filter({ hasText: newName }),
+  ).toBeVisible();
+
+  const newPath = path.join(e2eDataDir, "pipelines", newName, "pipeline.json");
+  const oldPath = path.join(e2eDataDir, "pipelines", oldName, "pipeline.json");
+  expect(fs.existsSync(newPath)).toBe(true);
+  expect(fs.existsSync(oldPath)).toBe(false);
+});
+
+test("pipeline rename save button with empty name does not navigate or error", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const oldName = `pipe-empty-submit-${suffix}`;
+  await createPipelineByRequest(page, oldName);
+  await page.goto(`/pipelines/${encodeURIComponent(oldName)}`);
+
+  const titleInput = page.locator("#pipeline-title");
+  await titleInput.fill("");
+  await page.getByTestId("pipeline-rename-save").click();
+  await expect(page).toHaveURL(new RegExp(`/pipelines/${oldName}$`));
+  await expect(titleInput).toHaveValue("");
+});
+
+test("pipeline rename unhappy path rejects invalid kebab name", async ({ page }) => {
+  const suffix = uniqueSuffix();
+  const oldName = `pipe-bad-old-${suffix}`;
+  await createPipelineByRequest(page, oldName);
+  const r = await wsRenamePipeline(page, oldName, "Bad_Name");
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain(
+    "name must contain only lowercase letters, digits, and dashes",
+  );
+});
+
+test("pipeline rename unhappy path rejects duplicate target name", async ({ page }) => {
+  const suffix = uniqueSuffix();
+  const a = `pipe-dup-a-${suffix}`;
+  const b = `pipe-dup-b-${suffix}`;
+  await createPipelineByRequest(page, a);
+  const r2 = await wsCreatePipeline(page, b);
+  expect(r2.ok).toBe(true);
+  const r = await wsRenamePipeline(page, a, b);
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("pipeline exists");
+});
+
+test("pipeline name autosaves from title input without clicking Rename", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const oldName = `pipe-ui-auto-${suffix}`;
+  const newName = `pipe-ui-auto-ren-${suffix}`;
+  await createPipelineByRequest(page, oldName);
+  await page.goto(`/pipelines/${encodeURIComponent(oldName)}`);
+
+  const titleInput = page.locator("#pipeline-title");
+  await expect(titleInput).toBeVisible();
+  await titleInput.click();
+  await titleInput.fill(newName);
+
+  await expect(page).toHaveURL(new RegExp(`/pipelines/${newName}$`), { timeout: 15_000 });
+  await expect(
+    page.getByTestId("pipeline-nav-link").filter({ hasText: newName }),
+  ).toBeVisible();
+
+  const newPath = path.join(e2eDataDir, "pipelines", newName, "pipeline.json");
+  const oldPath = path.join(e2eDataDir, "pipelines", oldName, "pipeline.json");
+  await expect.poll(() => fs.existsSync(newPath) && !fs.existsSync(oldPath)).toBe(true);
+});
+
+test("pipeline title can be cleared without saving then autosave rename", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const oldName = `pipe-clear-${suffix}`;
+  const newName = `pipe-clear-ren-${suffix}`;
+  await createPipelineByRequest(page, oldName);
+  await page.goto(`/pipelines/${encodeURIComponent(oldName)}`);
+
+  const titleInput = page.locator("#pipeline-title");
+  await titleInput.fill("");
+  await expect(titleInput).toHaveValue("");
+
+  const oldPath = path.join(e2eDataDir, "pipelines", oldName, "pipeline.json");
+  await page.waitForTimeout(2200);
+  expect(fs.existsSync(oldPath)).toBe(true);
+
+  await titleInput.fill(newName);
+  await expect(page).toHaveURL(new RegExp(`/pipelines/${newName}$`), { timeout: 15_000 });
+  expect(fs.existsSync(path.join(e2eDataDir, "pipelines", newName, "pipeline.json"))).toBe(
+    true,
+  );
+  expect(fs.existsSync(oldPath)).toBe(false);
+});
+
+test("pipeline title input keeps focus after rename autosave and ui broadcast", async ({
+  page,
+}) => {
+  const suffix = uniqueSuffix();
+  const oldName = `pipe-focus-${suffix}`;
+  const newName = `pipe-focus-ren-${suffix}`;
+  await createPipelineByRequest(page, oldName);
+  await page.goto(`/pipelines/${encodeURIComponent(oldName)}`);
+
+  const titleInput = page.locator("#pipeline-title");
+  await titleInput.click();
+  await titleInput.fill(newName);
+
+  await expect
+    .poll(
+      async () => titleInput.evaluate((el) => el === document.activeElement),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
 });
 
 test("skills detail main area renders from /skills/:id", async ({ page }) => {
@@ -974,10 +1109,11 @@ test("edit pipeline step happy path persists updated title and prompt", async ({
   await expect(editor).toBeVisible();
   await editor.locator("input[name='title']").fill(updatedTitle);
   await editor.locator("textarea[name='prompt']").fill(updatedPrompt);
-  await editor.locator("[data-testid='pipeline-step-save']").click();
 
   await expect(page).toHaveURL(new RegExp(`/pipelines/${pipelineID}$`));
-  await expect(page.getByTestId("pipeline-step-nav-item").filter({ hasText: updatedTitle.toLowerCase() })).toBeVisible();
+  await expect(
+    page.getByTestId("pipeline-step-nav-item").filter({ hasText: updatedTitle.toLowerCase() }),
+  ).toBeVisible({ timeout: 12_000 });
   await expect(editor.locator("input[name='title']")).toHaveValue(updatedTitle.toLowerCase());
   await expect(editor.locator("textarea[name='prompt']")).toHaveValue(updatedPrompt);
 
@@ -985,6 +1121,95 @@ test("edit pipeline step happy path persists updated title and prompt", async ({
   const reloadedEditor = page.getByTestId("pipeline-step-editor").first();
   await expect(reloadedEditor.locator("input[name='title']")).toHaveValue(updatedTitle.toLowerCase());
   await expect(reloadedEditor.locator("textarea[name='prompt']")).toHaveValue(updatedPrompt);
+});
+
+test("pipeline step title and prompt autosave without clicking Save", async ({ page }) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(page, `step-ui-auto-${suffix}`);
+  const createStep = await wsCreateStep(
+    page,
+    pipelineID,
+    `step-ui-auto-a-${suffix}`,
+    `prompt-a-${suffix}`,
+  );
+  expect(createStep.ok).toBe(true);
+
+  await page.goto(`/pipelines/${pipelineID}`);
+  const editor = page.getByTestId("pipeline-step-editor").first();
+  await expect(editor).toBeVisible();
+
+  const newTitle = `step-ui-auto-b-${suffix}`;
+  const newPrompt = `prompt-b-${suffix}`;
+  await editor.locator("input[name='title']").fill(newTitle);
+  await editor.locator("textarea[name='prompt']").fill(newPrompt);
+
+  await expect(
+    page.getByTestId("pipeline-step-nav-item").filter({ hasText: newTitle.toLowerCase() }),
+  ).toBeVisible({ timeout: 12_000 });
+
+  await page.reload();
+  const reloadedEditor = page.getByTestId("pipeline-step-editor").first();
+  await expect(reloadedEditor.locator("input[name='title']")).toHaveValue(newTitle.toLowerCase());
+  await expect(reloadedEditor.locator("textarea[name='prompt']")).toHaveValue(newPrompt);
+});
+
+test("pipeline step title can be cleared without saving then autosave new title", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(page, `step-clear-ui-${suffix}`);
+  const origTitle = `step-clear-orig-${suffix}`;
+  const createStep = await wsCreateStep(page, pipelineID, origTitle, `prompt-${suffix}`);
+  expect(createStep.ok).toBe(true);
+
+  await page.goto(`/pipelines/${pipelineID}`);
+  const editor = page.getByTestId("pipeline-step-editor").first();
+  const titleInput = editor.locator("input[name='title']");
+  await titleInput.fill("");
+  await expect(titleInput).toHaveValue("");
+
+  const pipePath = path.join(e2eDataDir, "pipelines", pipelineID, "pipeline.json");
+  const readStepTitle = () => {
+    const j = JSON.parse(fs.readFileSync(pipePath, "utf8")) as { steps: { title: string }[] };
+    return j.steps[0]?.title ?? "";
+  };
+
+  await page.waitForTimeout(2200);
+  expect(readStepTitle()).toBe(origTitle.toLowerCase());
+
+  const newTitle = `step-clear-ren-${suffix}`;
+  await titleInput.fill(newTitle);
+  await expect(
+    page.getByTestId("pipeline-step-nav-item").filter({ hasText: newTitle.toLowerCase() }),
+  ).toBeVisible({ timeout: 12_000 });
+  expect(readStepTitle()).toBe(newTitle.toLowerCase());
+});
+
+test("pipeline step title input keeps focus after autosave ui broadcast", async ({ page }) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(page, `step-title-focus-${suffix}`);
+  const createStep = await wsCreateStep(
+    page,
+    pipelineID,
+    `step-title-focus-a-${suffix}`,
+    `p-${suffix}`,
+  );
+  expect(createStep.ok).toBe(true);
+
+  await page.goto(`/pipelines/${pipelineID}`);
+  const editor = page.getByTestId("pipeline-step-editor").first();
+  const titleInput = editor.locator("input[name='title']");
+  await titleInput.click();
+  const newTitle = `step-title-focus-b-${suffix}`;
+  await titleInput.fill(newTitle);
+
+  await expect
+    .poll(
+      async () => titleInput.evaluate((el) => el === document.activeElement),
+      { timeout: 12_000 },
+    )
+    .toBe(true);
 });
 
 test("edit pipeline step unhappy path rejects empty title or prompt and preserves previous values", async ({
