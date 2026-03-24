@@ -751,8 +751,8 @@ fn pipelines_run_prints_kebab_run_name_first_line() {
     let text = String::from_utf8_lossy(&out);
     let first = text
         .lines()
-        .find(|l| !l.contains("prime-agent("))
-        .expect("line");
+        .find(|l| l.starts_with("pipeline "))
+        .expect("pipeline line");
     let parts: Vec<&str> = first.split_whitespace().collect();
     assert!(
         parts.len() >= 3 && parts[0] == "pipeline" && parts[1] == "pl",

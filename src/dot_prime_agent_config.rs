@@ -193,6 +193,36 @@ pub fn load_merged(local_path: &Path) -> Result<DotPrimeAgentConfig> {
     finalize_merged(merged, &cwd)
 }
 
+/// One-line summary of merged pipeline settings (local + global + defaults) plus resolved
+/// `data-dir` and `skills-dir` for startup display.
+pub fn format_effective_runtime_summary(
+    local_path: &Path,
+    resolved_data_dir: &Path,
+    resolved_skills_dir: &Path,
+) -> String {
+    match load_merged(local_path) {
+        Ok(d) => {
+            format!(
+                "effective: model={} clirunner={} yolo={} stdout_lines={} data-dir={} skills-dir={}",
+                d.model,
+                d.clirunner,
+                d.yolo,
+                d.stdout_lines,
+                resolved_data_dir.display(),
+                resolved_skills_dir.display(),
+            )
+        }
+        Err(e) => {
+            format!(
+                "effective: data-dir={} skills-dir={} (pipeline config: {})",
+                resolved_data_dir.display(),
+                resolved_skills_dir.display(),
+                e
+            )
+        }
+    }
+}
+
 /// Data directory from merged `data-dir` only (no `model` / `clirunner` validation). For `serve`
 /// when the local scaffold may still have null model.
 pub fn merged_data_dir_for_serve(local_path: &Path) -> Result<Option<PathBuf>> {

@@ -38,10 +38,11 @@ pub struct PipelineRootArgs {
     /// Pipeline to run (with `--file` or `--prompt`; omit `run` subcommand)
     #[arg(long)]
     pub pipeline: Option<String>,
-    /// User prompt (with `--pipeline`; mutually exclusive with `--file`)
+    /// User prompt (with `--pipeline` or default interactive run; mutually exclusive with `--file`)
     #[arg(long)]
     pub prompt: Option<String>,
-    /// Read user prompt from file (with `--pipeline`; mutually exclusive with `--prompt`)
+    /// Read user prompt from file (with `--pipeline` or default interactive run; mutually exclusive
+    /// with `--prompt`)
     #[arg(long)]
     pub file: Option<PathBuf>,
     /// Ignored (pipelines always use plain stdout; kept for compatibility)

@@ -486,6 +486,8 @@ fn normalize_pipeline_run_stdout(raw: &str) -> String {
         first = false;
         let line = if line.starts_with("prime-agent(") {
             "prime-agent(<version>)".to_string()
+        } else if line.starts_with("effective:") {
+            "<effective-config>".to_string()
         } else if line.starts_with("pipeline ") {
             normalize_pipeline_header_line(line)
         } else {
@@ -499,6 +501,7 @@ fn normalize_pipeline_run_stdout(raw: &str) -> String {
 }
 
 const PIPELINE_RUN_STDOUT_GOLDEN: &str = r#"prime-agent(<version>)
+<effective-config>
 pipeline demo-pipe <run_name>
 step 1 stepone
   * running (no skill) (<counts>)

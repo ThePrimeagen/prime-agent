@@ -176,13 +176,18 @@ pub fn pipeline_artifact_dir_for(cwd: &Path, pipeline_name: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("no run dir for pipeline '{pipeline_name}' under {:?}", root))
 }
 
-/// Everything after the first line of stdout (the `prime-agent(version)` banner).
+/// Everything after the first two lines of stdout (banner + effective config summary).
 pub fn stdout_after_version_line(stdout: &[u8]) -> String {
     let text = String::from_utf8_lossy(stdout);
-    match text.split_once('\n') {
-        Some((_, rest)) => rest.to_string(),
-        None => String::new(),
+    let mut start = 0_usize;
+    for _ in 0..2 {
+        if let Some(pos) = text[start..].find('\n') {
+            start += pos + 1;
+        } else {
+            return String::new();
+        }
     }
+    text[start..].to_string()
 }
 
 /// Base `prime-agent` invocation with `--data-dir`, `--skills-dir`, and PATH to a mock `cursor-agent`.

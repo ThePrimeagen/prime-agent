@@ -48,6 +48,7 @@ fn main() -> Result<()> {
     println!("\u{001b}[32mprime-agent({version})\u{001b}[0m");
 
     let overrides = parse_config_overrides(&cli.config_overrides)?;
+    print_effective_config_line(&cli, &overrides)?;
 
     if let Some(RootCommand::Config { action }) = &cli.command {
         handle_config_command(action.as_ref())?;
@@ -245,7 +246,7 @@ fn run_pipelines_default(cli: &Cli, overrides: &HashMap<String, String>) -> Resu
 
     let pipeline_name = pipeline_pick::pick_pipeline_interactive(&entries)?;
     let dot = crate::dot_prime_agent_config::load_merged(&local_cfg)?;
-    let user_text = read_user_prompt_line()?;
+    let user_text = resolve_user_text_for_default_pipeline(cli)?;
     let options = PipelineRunOptions { debug: cli.debug };
     crate::pipeline_run::run(
         &pipeline_name,
@@ -282,6 +283,16 @@ fn read_user_prompt_line() -> Result<String> {
         .read_line(&mut line)
         .context("read user prompt from stdin")?;
     Ok(line.trim_end().to_string())
+}
+
+fn resolve_user_text_for_default_pipeline(cli: &Cli) -> Result<String> {
+    match (cli.pipeline.prompt.as_deref(), cli.pipeline.file.as_ref()) {
+        (Some(p), None) => Ok(p.to_string()),
+        (None, Some(f)) => std::fs::read_to_string(f)
+            .with_context(|| format!("read user prompt file '{}'", f.display())),
+        (None, None) => read_user_prompt_line(),
+        (Some(_), Some(_)) => Err(anyhow!("use only one of --prompt or --file, not both")),
+    }
 }
 
 fn run_list_cmd(skills_store: &SkillsStore, fragment: Option<String>) -> Result<()> {
@@ -361,6 +372,24 @@ fn handle_config_command(action: Option<&ConfigAction>) -> Result<()> {
             print_config(&config);
         }
     }
+    Ok(())
+}
+
+fn print_effective_config_line(cli: &Cli, overrides: &HashMap<String, String>) -> Result<()> {
+    let cwd = std::env::current_dir().context("current_dir for effective config line")?;
+    let local_cfg = cwd.join(".prime-agent").join("config.json");
+    let merged_dd = crate::dot_prime_agent_config::merged_data_dir_for_serve(&local_cfg)?;
+    let data_dir = crate::data_dir::resolve_data_dir(
+        cli.data_dir.as_deref(),
+        merged_dd.as_deref(),
+    )?;
+    let skills_dir = resolve_skills_dir(cli, overrides, merged_dd.as_deref())?;
+    let line = crate::dot_prime_agent_config::format_effective_runtime_summary(
+        &local_cfg,
+        &data_dir,
+        &skills_dir,
+    );
+    println!("{line}");
     Ok(())
 }
 
@@ -469,4 +498,51 @@ fn expand_path(path: &Path) -> PathBuf {
         return PathBuf::from(replaced);
     }
     path.to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn default_pipeline_both_prompt_and_file_errors() {
+        let cli = Cli::parse_from([
+            "prime-agent",
+            "--prompt",
+            "x",
+            "--file",
+            "/tmp/prime-agent-does-not-matter",
+        ]);
+        let err = resolve_user_text_for_default_pipeline(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("use only one of --prompt or --file"),
+            "expected mutual exclusion error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn default_pipeline_prompt_only() {
+        let cli = Cli::parse_from(["prime-agent", "--prompt", "hello"]);
+        assert_eq!(
+            resolve_user_text_for_default_pipeline(&cli).unwrap(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn default_pipeline_file_only() {
+        let temp = TempDir::new().expect("temp");
+        let f = temp.path().join("p.txt");
+        std::fs::write(&f, "from-file\n").expect("write");
+        let cli = Cli::parse_from([
+            "prime-agent",
+            "--file",
+            f.to_str().expect("utf8"),
+        ]);
+        assert_eq!(
+            resolve_user_text_for_default_pipeline(&cli).unwrap(),
+            "from-file\n"
+        );
+    }
 }

@@ -10,7 +10,7 @@ use crate::skills_store::SkillsStore;
 
 pub const NAME_RULE_MESSAGE: &str = "name must contain only lowercase letters, digits, and dashes";
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct PipelineFile {
     pub steps: Vec<PipelineStepRecord>,
 }
@@ -21,13 +21,80 @@ pub struct PipelineSkillRef {
     pub alias: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PipelineStepRecord {
     pub id: i64,
     pub title: String,
     pub prompt: String,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<PipelineSkillRef>,
+}
+
+/// JSON shape for `pipeline.json` on disk: skills may be objects or skill directory names (strings).
+#[derive(Debug, Deserialize)]
+struct PipelineFileDe {
+    steps: Vec<PipelineStepRecordDe>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PipelineStepRecordDe {
+    id: i64,
+    title: String,
+    prompt: String,
+    #[serde(default)]
+    skills: Vec<PipelineSkillRefDe>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PipelineSkillRefDe {
+    Short(String),
+    Full(PipelineSkillRef),
+}
+
+fn hydrate_pipeline_file(
+    de: PipelineFileDe,
+    skills: &SkillsStore,
+    pipeline_path: &str,
+) -> Result<(PipelineFile, bool)> {
+    let mut canonicalized = false;
+    let mut steps = Vec::new();
+    for step in de.steps {
+        let mut skills_out = Vec::new();
+        for att in step.skills {
+            match att {
+                PipelineSkillRefDe::Full(r) => skills_out.push(r),
+                PipelineSkillRefDe::Short(s) => {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        return Err(anyhow!(
+                            "empty skill reference in pipeline {pipeline_path}"
+                        ));
+                    }
+                    let normalized = SkillsStore::normalize_skill_name(trimmed);
+                    let id = skills
+                        .skill_uuid_for_name(&normalized)
+                        .with_context(|| {
+                            format!(
+                                "resolve skill reference '{normalized}' in pipeline {pipeline_path}"
+                            )
+                        })?;
+                    canonicalized = true;
+                    skills_out.push(PipelineSkillRef {
+                        id,
+                        alias: normalized,
+                    });
+                }
+            }
+        }
+        steps.push(PipelineStepRecord {
+            id: step.id,
+            title: step.title,
+            prompt: step.prompt,
+            skills: skills_out,
+        });
+    }
+    Ok((PipelineFile { steps }, canonicalized))
 }
 
 #[derive(Debug, Clone)]
@@ -90,13 +157,18 @@ impl PipelineStore {
         Ok(())
     }
 
-    fn read_file(&self, name: &str) -> Result<PipelineFile> {
+    fn read_file(&self, name: &str, skills: &SkillsStore) -> Result<PipelineFile> {
         let path = self.pipeline_file(name);
+        let ctx = path.display().to_string();
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("read pipeline '{}'", path.display()))?;
-        let parsed: PipelineFile = serde_json::from_str(&raw)
+        let de: PipelineFileDe = serde_json::from_str(&raw)
             .with_context(|| format!("parse pipeline '{}'", path.display()))?;
-        Ok(parsed)
+        let (file, from_short) = hydrate_pipeline_file(de, skills, &ctx)?;
+        if from_short {
+            self.write_file_atomic(name, &file)?;
+        }
+        Ok(file)
     }
 
     fn write_file_atomic(&self, name: &str, file: &PipelineFile) -> Result<()> {
@@ -239,7 +311,7 @@ impl PipelineStore {
     }
 
     pub fn list_steps(&self, skills: &SkillsStore, pipeline_name: &str) -> Result<Vec<PipelineStepView>> {
-        let file = self.read_file(pipeline_name)?;
+        let file = self.read_file(pipeline_name, skills)?;
         let file = self.resolve_and_maybe_rewrite(skills, pipeline_name, file)?;
         let index = skills.uuid_index()?;
         let mut out = Vec::new();
@@ -279,13 +351,19 @@ impl PipelineStore {
         file.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1
     }
 
-    pub fn create_step(&self, pipeline_name: &str, title: &str, prompt: &str) -> Result<i64> {
+    pub fn create_step(
+        &self,
+        skills: &SkillsStore,
+        pipeline_name: &str,
+        title: &str,
+        prompt: &str,
+    ) -> Result<i64> {
         let title = title.trim().to_lowercase();
         let prompt = prompt.to_string();
         if title.is_empty() {
             return Err(anyhow!("title is required"));
         }
-        let mut file = self.read_file(pipeline_name)?;
+        let mut file = self.read_file(pipeline_name, skills)?;
         let id = Self::next_step_id(&file);
         file.steps.push(PipelineStepRecord {
             id,
@@ -299,6 +377,7 @@ impl PipelineStore {
 
     pub fn update_step(
         &self,
+        skills: &SkillsStore,
         pipeline_name: &str,
         step_id: i64,
         title: &str,
@@ -309,7 +388,7 @@ impl PipelineStore {
         if title.is_empty() {
             return Err(anyhow!("title is required"));
         }
-        let mut file = self.read_file(pipeline_name)?;
+        let mut file = self.read_file(pipeline_name, skills)?;
         let Some(step) = file.steps.iter_mut().find(|s| s.id == step_id) else {
             return Err(anyhow!("step not found"));
         };
@@ -319,8 +398,8 @@ impl PipelineStore {
         Ok(())
     }
 
-    pub fn delete_step(&self, pipeline_name: &str, step_id: i64) -> Result<()> {
-        let mut file = self.read_file(pipeline_name)?;
+    pub fn delete_step(&self, skills: &SkillsStore, pipeline_name: &str, step_id: i64) -> Result<()> {
+        let mut file = self.read_file(pipeline_name, skills)?;
         let pos = file
             .steps
             .iter()
@@ -333,11 +412,12 @@ impl PipelineStore {
 
     pub fn reorder_step(
         &self,
+        skills: &SkillsStore,
         pipeline_name: &str,
         step_id: i64,
         target_step_id: i64,
     ) -> Result<()> {
-        let mut file = self.read_file(pipeline_name)?;
+        let mut file = self.read_file(pipeline_name, skills)?;
         let source_idx = file
             .steps
             .iter()
@@ -380,7 +460,7 @@ impl PipelineStore {
             .ok_or_else(|| anyhow!("skill not found"))?
             .to_string();
 
-        let mut file = self.read_file(pipeline_name)?;
+        let mut file = self.read_file(pipeline_name, skills)?;
         let Some(step) = file.steps.iter_mut().find(|s| s.id == step_id) else {
             return Err(anyhow!("step not found"));
         };
@@ -394,13 +474,14 @@ impl PipelineStore {
 
     pub fn delete_step_skill(
         &self,
+        skills: &SkillsStore,
         pipeline_name: &str,
         step_id: i64,
         skill_uuid: &str,
     ) -> Result<()> {
         let id = Uuid::parse_str(skill_uuid.trim())
             .map_err(|_| anyhow!("skill_id must be a valid UUID"))?;
-        let mut file = self.read_file(pipeline_name)?;
+        let mut file = self.read_file(pipeline_name, skills)?;
         let Some(step) = file.steps.iter_mut().find(|s| s.id == step_id) else {
             return Err(anyhow!("step not found"));
         };
@@ -414,7 +495,12 @@ impl PipelineStore {
     }
 
     /// Update `alias` everywhere this skill id appears (after directory rename).
-    pub fn update_alias_for_skill_id(&self, skill_id: Uuid, new_alias: &str) -> Result<()> {
+    pub fn update_alias_for_skill_id(
+        &self,
+        skills: &SkillsStore,
+        skill_id: Uuid,
+        new_alias: &str,
+    ) -> Result<()> {
         if !self.root.exists() {
             return Ok(());
         }
@@ -434,7 +520,7 @@ impl PipelineStore {
             if name.is_empty() {
                 continue;
             }
-            let mut file = self.read_file(&name)?;
+            let mut file = self.read_file(&name, skills)?;
             let mut changed = false;
             for step in &mut file.steps {
                 for s in &mut step.skills {
@@ -452,13 +538,13 @@ impl PipelineStore {
     }
 
     /// Remove skill id from all pipeline steps (skill deleted).
-    pub fn remove_skill_id_everywhere(&self, skill_id: Uuid) -> Result<()> {
+    pub fn remove_skill_id_everywhere(&self, skills: &SkillsStore, skill_id: Uuid) -> Result<()> {
         if !self.root.exists() {
             return Ok(());
         }
         let names = self.list_pipeline_names()?;
         for name in names {
-            let mut file = self.read_file(&name)?;
+            let mut file = self.read_file(&name, skills)?;
             let mut changed = false;
             for step in &mut file.steps {
                 let before = step.skills.len();
@@ -472,5 +558,96 @@ impl PipelineStore {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn setup_skill(skills_root: &Path, name: &str, id: Uuid) {
+        let dir = skills_root.join(name);
+        fs::create_dir_all(&dir).expect("skill dir");
+        fs::write(dir.join("SKILL.md"), "# test\n").expect("SKILL.md");
+        fs::write(dir.join(crate::skills_store::SKILL_ID_FILE), format!("{id}\n"))
+            .expect("skill id");
+    }
+
+    #[test]
+    fn string_skill_ref_resolves_to_uuid_and_alias() {
+        let temp = TempDir::new().expect("temp");
+        let data = temp.path().join("data");
+        let skills_root = temp.path().join("skills");
+        let sid = Uuid::new_v4();
+        setup_skill(&skills_root, "my-skill", sid);
+
+        let store = PipelineStore::new(&data);
+        let skills = SkillsStore::new(skills_root);
+        fs::create_dir_all(data.join("pipelines/p1")).expect("pipe dir");
+        fs::write(
+            data.join("pipelines/p1/pipeline.json"),
+            r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":["my-skill"]}]}"#,
+        )
+        .expect("pipeline.json");
+
+        let steps = store.list_steps(&skills, "p1").expect("list_steps");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].skills.len(), 1);
+        assert_eq!(steps[0].skills[0].id, sid);
+        assert_eq!(steps[0].skills[0].resolved_name.as_deref(), Some("my-skill"));
+    }
+
+    #[test]
+    fn unknown_string_skill_ref_returns_error() {
+        let temp = TempDir::new().expect("temp");
+        let data = temp.path().join("data");
+        let skills_root = temp.path().join("skills");
+        fs::create_dir_all(&skills_root).expect("skills dir");
+
+        let store = PipelineStore::new(&data);
+        let skills = SkillsStore::new(skills_root);
+        fs::create_dir_all(data.join("pipelines/p1")).expect("pipe dir");
+        fs::write(
+            data.join("pipelines/p1/pipeline.json"),
+            r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":["missing-skill"]}]}"#,
+        )
+        .expect("pipeline.json");
+
+        let err = store
+            .list_steps(&skills, "p1")
+            .expect_err("expected error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("missing-skill") || msg.contains("not found"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn mixed_string_and_object_skill_refs() {
+        let temp = TempDir::new().expect("temp");
+        let data = temp.path().join("data");
+        let skills_root = temp.path().join("skills");
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        setup_skill(&skills_root, "short-name", id_a);
+        setup_skill(&skills_root, "other-skill", id_b);
+
+        let store = PipelineStore::new(&data);
+        let skills = SkillsStore::new(skills_root);
+        fs::create_dir_all(data.join("pipelines/p1")).expect("pipe dir");
+        let body = format!(
+            r#"{{"steps":[{{"id":1,"title":"s","prompt":"p","skills":["short-name",{{"id":"{id_b}","alias":"other-skill"}}]}}]}}"#
+        );
+        fs::write(data.join("pipelines/p1/pipeline.json"), body).expect("pipeline.json");
+
+        let steps = store.list_steps(&skills, "p1").expect("list_steps");
+        assert_eq!(steps[0].skills.len(), 2);
+        let ids: Vec<Uuid> = steps[0].skills.iter().map(|s| s.id).collect();
+        assert!(ids.contains(&id_a));
+        assert!(ids.contains(&id_b));
     }
 }

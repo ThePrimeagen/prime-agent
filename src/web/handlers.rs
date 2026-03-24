@@ -359,7 +359,7 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
                 }
                 if let Err(e) = state
                     .pipelines
-                    .update_alias_for_skill_id(skill_uid, &new_name)
+                    .update_alias_for_skill_id(&state.skills, skill_uid, &new_name)
                 {
                     return ack_err(&id, &format!("{e:#}"));
                 }
@@ -403,7 +403,10 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             if let Err(e) = state.skills.delete_skill(&name) {
                 return ack_err(&id, &format!("{e:#}"));
             }
-            if let Err(e) = state.pipelines.remove_skill_id_everywhere(skill_uid) {
+            if let Err(e) = state
+                .pipelines
+                .remove_skill_id_everywhere(&state.skills, skill_uid)
+            {
                 return ack_err(&id, &format!("{e:#}"));
             }
             state.skill_activity.mark_mutation();
@@ -502,7 +505,10 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
                 return ack_err(&id, "not found");
             }
             suppress_pipeline_file(state, &pipeline);
-            let step_id = match state.pipelines.create_step(&pipeline, &title, &prompt) {
+            let step_id = match state
+                .pipelines
+                .create_step(&state.skills, &pipeline, &title, &prompt)
+            {
                 Ok(id) => id,
                 Err(e) => {
                     let msg = e.to_string();
@@ -535,7 +541,7 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             suppress_pipeline_file(state, &pipeline);
             if let Err(e) = state
                 .pipelines
-                .update_step(&pipeline, step_id, &title, &prompt)
+                .update_step(&state.skills, &pipeline, step_id, &title, &prompt)
             {
                 let msg = e.to_string();
                 if msg.contains("required") {
@@ -561,7 +567,10 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             step_id,
         } => {
             suppress_pipeline_file(state, &pipeline);
-            if let Err(e) = state.pipelines.delete_step(&pipeline, step_id) {
+            if let Err(e) = state
+                .pipelines
+                .delete_step(&state.skills, &pipeline, step_id)
+            {
                 let msg = e.to_string();
                 if msg.contains("not found") {
                     return ack_err(&id, "not found");
@@ -586,7 +595,7 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             suppress_pipeline_file(state, &pipeline);
             if let Err(e) = state
                 .pipelines
-                .reorder_step(&pipeline, step_id, target_step_id)
+                .reorder_step(&state.skills, &pipeline, step_id, target_step_id)
             {
                 let msg = e.to_string();
                 if msg.contains("not found") {
@@ -649,7 +658,7 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             suppress_pipeline_file(state, &pipeline);
             if let Err(e) = state
                 .pipelines
-                .delete_step_skill(&pipeline, step_id, &skill_id)
+                .delete_step_skill(&state.skills, &pipeline, step_id, &skill_id)
             {
                 if e.to_string().contains("not found") {
                     return ack_err(&id, "not found");

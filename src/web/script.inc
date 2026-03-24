@@ -386,10 +386,9 @@
 
       function resyncPipelineRenameAutosaveBaseline() {
         document.querySelectorAll("form[data-ws-form='rename_pipeline']").forEach((form) => {
-          const p = buildPipelineRenamePayload(form);
-          if (p !== null) {
-            getPipelineRenameFormState(form).lastSentPayload = p;
-          }
+          const old_name = form.getAttribute("data-old-name") || "";
+          const st = getPipelineRenameFormState(form);
+          st.lastSentPayload = old_name + "|" + old_name;
         });
       }
 
@@ -786,7 +785,7 @@
             primeEscAttr(pl.name) +
             '" data-pipeline-location="/pipelines/' +
             pl.name_encoded +
-            '">\n              <label>Name<br><input name="name" id="pipeline-title" value="' +
+            '">\n              <label>Title<br><input name="name" id="pipeline-title" value="' +
             primeEscAttr(pl.name) +
             '" data-lowercase-field="pipeline-name" data-testid="pipeline-rename-name"></label><br><br>\n              <button type="submit" data-testid="pipeline-rename-save">Rename</button>\n            </form>\n          </article>\n          <button\n            type="button"\n            data-testid="pipeline-step-create-open"\n            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"\n            onclick="document.getElementById(\'pipeline-step-modal\').showModal();">Add Step</button>\n\n          <dialog id="pipeline-step-modal">\n            <form data-ws-form="create_step" data-pipeline="' +
             primeEscAttr(pl.name) +
