@@ -73,13 +73,15 @@ fn page_context(
     let mut skills: Vec<SkillVm> = Vec::new();
     for name in &skill_names {
         let prompt = state.skills.load_skill(name)?;
-        skills.push(skill_vm(name, &prompt));
+        let sid = state.skills.skill_uuid_for_name(name)?;
+        skills.push(skill_vm(name, &prompt, &sid.to_string()));
     }
 
     let selected_skill = if let Some(name) = selected_skill_name {
         if state.skills.skill_exists(name) {
             let prompt = state.skills.load_skill(name)?;
-            Some(skill_vm(name, &prompt))
+            let sid = state.skills.skill_uuid_for_name(name)?;
+            Some(skill_vm(name, &prompt, &sid.to_string()))
         } else {
             return Err(anyhow!("not found"));
         }
@@ -88,24 +90,33 @@ fn page_context(
     };
 
     let pipeline_names = state.pipelines.list_pipeline_names()?;
-    let pipelines: Vec<PipelineVm> = pipeline_names.iter().map(|n| pipeline_vm(n)).collect();
+    let pipelines: Vec<PipelineVm> = pipeline_names
+        .iter()
+        .map(|n| {
+            let broken = state.pipelines.pipeline_is_broken(&state.skills, n);
+            pipeline_vm(n, broken)
+        })
+        .collect();
 
     let selected_pipeline = if let Some(name) = selected_pipeline_name {
         state
             .pipelines
             .get_pipeline_meta(name)
             .ok()
-            .map(|m| pipeline_vm(&m.name))
+            .map(|m| {
+                let broken = state.pipelines.pipeline_is_broken(&state.skills, &m.name);
+                pipeline_vm(&m.name, broken)
+            })
     } else {
         None
     };
 
     let mut pipeline_steps: Vec<PipelineStepVm> = Vec::new();
     if let Some(name) = selected_pipeline_name {
-        let steps = state.pipelines.list_steps(name)?;
+        let steps = state.pipelines.list_steps(&state.skills, name)?;
         for s in steps {
             let summary = join_skill_names(&s.skills);
-            let sks: Vec<_> = s.skills.iter().map(|x| step_skill_vm(&x.name)).collect();
+            let sks: Vec<_> = s.skills.iter().map(step_skill_vm).collect();
             pipeline_steps.push(step_vm(
                 s.id,
                 &s.title,
@@ -285,9 +296,12 @@ pub fn broadcast_fs_changed(state: &AppState) -> Result<()> {
 fn handle_client_op(state: &AppState, op: ClientOp) -> String {
     match op {
         ClientOp::CreateSkill { id, name, prompt } => {
-            let name = name.trim().to_string();
+            let name = SkillsStore::normalize_skill_name(&name);
             if prompt.is_empty() {
                 return ack_err(&id, "prompt is required");
+            }
+            if name.is_empty() {
+                return ack_err(&id, "name is required");
             }
             if let Err(e) = SkillsStore::validate_write_name(&name) {
                 return ack_err(&id, &e.to_string());
@@ -317,9 +331,12 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             name,
             prompt,
         } => {
-            let new_name = name.trim().to_string();
+            let new_name = SkillsStore::normalize_skill_name(&name);
             if prompt.is_empty() {
                 return ack_err(&id, "prompt is required");
+            }
+            if new_name.is_empty() {
+                return ack_err(&id, "name is required");
             }
             if let Err(e) = SkillsStore::validate_write_name(&new_name) {
                 return ack_err(&id, &e.to_string());
@@ -327,6 +344,10 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             if !state.skills.skill_exists(&old_name) {
                 return ack_err(&id, "not found");
             }
+            let skill_uid = match state.skills.skill_uuid_for_name(&old_name) {
+                Ok(u) => u,
+                Err(e) => return ack_err(&id, &format!("{e:#}")),
+            };
             if old_name != new_name {
                 if state.skills.skill_exists(&new_name) {
                     return ack_err(&id, "skill already exists");
@@ -336,7 +357,10 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
                 if let Err(e) = state.skills.rename_skill_directory(&old_name, &new_name) {
                     return ack_err(&id, &format!("{e:#}"));
                 }
-                if let Err(e) = state.pipelines.rename_skill_reference(&old_name, &new_name) {
+                if let Err(e) = state
+                    .pipelines
+                    .update_alias_for_skill_id(skill_uid, &new_name)
+                {
                     return ack_err(&id, &format!("{e:#}"));
                 }
             }
@@ -371,11 +395,15 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             if !state.skills.skill_exists(&name) {
                 return ack_err(&id, "not found");
             }
+            let skill_uid = match state.skills.skill_uuid_for_name(&name) {
+                Ok(u) => u,
+                Err(e) => return ack_err(&id, &format!("{e:#}")),
+            };
             suppress_skill_dir(state, &name);
             if let Err(e) = state.skills.delete_skill(&name) {
                 return ack_err(&id, &format!("{e:#}"));
             }
-            if let Err(e) = state.pipelines.remove_skill_everywhere(&name) {
+            if let Err(e) = state.pipelines.remove_skill_id_everywhere(skill_uid) {
                 return ack_err(&id, &format!("{e:#}"));
             }
             state.skill_activity.mark_mutation();
@@ -581,15 +609,14 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             step_id,
             skill_id,
         } => {
-            let skill_name = skill_id.trim().to_string();
-            if skill_name.is_empty() {
+            let skill_id = skill_id.trim().to_string();
+            if skill_id.is_empty() {
                 return ack_err(&id, "skill_id is required");
             }
-            let exists = state.skills.skill_exists(&skill_name);
             suppress_pipeline_file(state, &pipeline);
             match state
                 .pipelines
-                .add_step_skill(&pipeline, step_id, &skill_name, || exists)
+                .add_step_skill(&state.skills, &pipeline, step_id, &skill_id)
             {
                 Ok(()) => {
                     if let Err(e) = record_pipeline_mutation(state, &pipeline) {
@@ -617,12 +644,12 @@ fn handle_client_op(state: &AppState, op: ClientOp) -> String {
             id,
             pipeline,
             step_id,
-            skill_name,
+            skill_id,
         } => {
             suppress_pipeline_file(state, &pipeline);
             if let Err(e) = state
                 .pipelines
-                .delete_step_skill(&pipeline, step_id, &skill_name)
+                .delete_step_skill(&pipeline, step_id, &skill_id)
             {
                 if e.to_string().contains("not found") {
                     return ack_err(&id, "not found");
@@ -718,7 +745,7 @@ async fn get_pipeline_step_path(
     }
     let steps = state
         .pipelines
-        .list_steps(&name)
+        .list_steps(&state.skills, &name)
         .map_err(|e| internal(&e))?;
     if !steps.iter().any(|s| s.id == step_id) {
         return Err(not_found());

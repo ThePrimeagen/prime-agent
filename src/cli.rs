@@ -1,4 +1,3 @@
-use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -6,11 +5,14 @@ use std::path::PathBuf;
 #[command(
     name = "prime-agent",
     version,
-    about = "Skill-driven AGENTS.md builder and synchronizer"
+    about = "Pipelines, skills, and web UI for prime-agent",
+    disable_help_subcommand = true
 )]
 pub struct Cli {
+    #[command(flatten)]
+    pub pipeline: PipelineRootArgs,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<RootCommand>,
     /// Print debug messages to stderr (paths, stages, subprocess), and echo each cursor-agent
     /// stdout/stderr line as `{step}({n} / {total}):stdout|stderr:: ...`.
     #[arg(long, global = true)]
@@ -19,7 +21,7 @@ pub struct Cli {
     #[arg(long = "config", value_name = "key:value")]
     pub config_overrides: Vec<String>,
     /// Prime-agent data directory (pipelines/, and default skills/ when `--skills-dir` is omitted).
-    /// Default: current working directory (no global-config or environment fallbacks).
+    /// Default: merged `data-dir` from `.prime-agent/config.json` and global config, else cwd.
     #[arg(long, global = true)]
     pub data_dir: Option<PathBuf>,
     /// Directory containing skill markdown files (default: `<data-dir>/skills`, or `./skills` when
@@ -31,19 +33,24 @@ pub struct Cli {
     pub agents_path: Option<PathBuf>,
 }
 
+#[derive(clap::Args, Debug, Clone)]
+pub struct PipelineRootArgs {
+    /// Pipeline to run (with `--file` or `--prompt`; omit `run` subcommand)
+    #[arg(long)]
+    pub pipeline: Option<String>,
+    /// User prompt (with `--pipeline`; mutually exclusive with `--file`)
+    #[arg(long)]
+    pub prompt: Option<String>,
+    /// Read user prompt from file (with `--pipeline`; mutually exclusive with `--prompt`)
+    #[arg(long)]
+    pub file: Option<PathBuf>,
+    /// Ignored (pipelines always use plain stdout; kept for compatibility)
+    #[arg(long)]
+    pub no_tui: bool,
+}
+
 #[derive(Subcommand, Debug)]
-pub enum Command {
-    /// Build AGENTS.md from selected skills
-    Get {
-        /// Skill names (comma-separated or space-separated)
-        skills: Vec<String>,
-    },
-    /// Store a skill markdown file under skills/<name>.md
-    Set { name: String, path: PathBuf },
-    /// Sync skills with AGENTS.md
-    Sync,
-    /// Sync skills and pull remote changes
-    SyncRemote,
+pub enum RootCommand {
     /// List available skills
     List {
         /// Optional substring to filter skills
@@ -51,7 +58,7 @@ pub enum Command {
     },
     /// List local skills and sync status
     Local,
-    /// Get or set configuration values
+    /// List, get, or set configuration values
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
@@ -62,33 +69,8 @@ pub enum Command {
         #[arg(long, env = "PRIME_AGENT_ADDR")]
         bind: Option<String>,
     },
-    /// Remove a skill section from AGENTS.md
-    Delete { name: String },
-    /// Remove a skill section and delete its markdown file
-    DeleteGlobally { name: String },
     /// Delete pipeline run artifacts under `./.prime-agent/pipelines/` in the current directory
     Clear,
-    /// Pipelines: omit the subcommand to choose a pipeline from the interactive list (TTY) or list names (non-TTY); use `run` to invoke by name without the picker; or pass `--pipeline` with `--file` / `--prompt` to skip the picker and stdin prompt
-    Pipelines {
-        /// Pipeline to run (with `--file` or `--prompt`; omit `run` subcommand)
-        #[arg(long)]
-        pipeline: Option<String>,
-        /// User prompt (with `--pipeline`; mutually exclusive with `--file`)
-        #[arg(long)]
-        prompt: Option<String>,
-        /// Read user prompt from file (with `--pipeline`; mutually exclusive with `--prompt`)
-        #[arg(long)]
-        file: Option<PathBuf>,
-        /// Ignored (pipelines always use plain stdout; kept for compatibility)
-        #[arg(long)]
-        no_tui: bool,
-        #[command(subcommand)]
-        action: Option<PipelinesAction>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum PipelinesAction {
     /// Execute pipeline stages; outputs under .prime-agent/pipelines/<adj-noun-slug>/
     Run {
         /// Pipeline name (kebab-case, must exist under data-dir/pipelines/)
@@ -103,6 +85,10 @@ pub enum PipelinesAction {
         #[arg(long)]
         no_tui: bool,
     },
+    /// Print this help message
+    Help,
+    /// Print version
+    Version,
 }
 
 #[derive(Subcommand, Debug)]
@@ -111,20 +97,4 @@ pub enum ConfigAction {
     Set { name: String, value: String },
     /// Get a configuration value
     Get { name: String },
-}
-
-pub fn expand_skill_args(args: Vec<String>) -> Result<Vec<String>> {
-    let mut names = Vec::new();
-    for arg in args {
-        for piece in arg.split(',') {
-            let trimmed = piece.trim();
-            if !trimmed.is_empty() {
-                names.push(trimmed.to_string());
-            }
-        }
-    }
-    if names.is_empty() {
-        bail!("no skills provided");
-    }
-    Ok(names)
 }

@@ -41,6 +41,13 @@ function uniqueSuffix(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
+const SKILL_ID_FILE = ".prime-agent-skill-id";
+
+function readSkillUuidFromDisk(e2eDataDir: string, skillName: string): string {
+  const p = path.join(e2eDataDir, "skills", skillName, SKILL_ID_FILE);
+  return fs.readFileSync(p, "utf8").trim();
+}
+
 async function openSkillsTab(page: Page) {
   await page.getByTestId("tab-skills").click();
   await expect(page).toHaveURL(/\/skills(\/[^/]+)?$/);
@@ -474,17 +481,22 @@ test("create skill happy path from Skills tab", async ({ page }) => {
   await expect(page.locator("#skills-main-panel textarea[name='prompt']")).toHaveValue(prompt);
 });
 
-test("create skill unhappy path rejects non-kebab names", async ({ page }) => {
-  const invalidNames = ["bad name", "Bad-Name", "bad_name", ""];
+test("create skill rejects empty name after normalization", async ({ page }) => {
   await page.goto("/skills");
-  for (const name of invalidNames) {
-    const r = await wsCreateSkill(page, name, "some-prompt");
-    expect(r.ok).toBe(false);
-    expect(r.error ?? "").toContain("name must contain only lowercase letters, digits, and dashes");
-  }
+  const r = await wsCreateSkill(page, "   ", "some-prompt");
+  expect(r.ok).toBe(false);
+  expect(r.error ?? "").toContain("name is required");
 });
 
-test("skill update unhappy path rejects invalid rename and allows kebab rename", async ({
+test("create skill normalizes messy names to kebab", async ({ page }) => {
+  const suffix = uniqueSuffix();
+  await page.goto("/skills");
+  const r = await wsCreateSkill(page, `Bad_Name_${suffix}`, "some-prompt");
+  expect(r.ok).toBe(true);
+  expect(r.location ?? "").toContain(`bad-name-${suffix}`);
+});
+
+test("skill update normalizes rename to kebab and allows further kebab rename", async ({
   page,
 }) => {
   const suffix = uniqueSuffix();
@@ -494,13 +506,11 @@ test("skill update unhappy path rejects invalid rename and allows kebab rename",
 
   await createSkillByRequest(page, originalName, prompt);
 
-  const invalidRename = await wsUpdateSkill(page, originalName, "Legacy_Name", prompt);
-  expect(invalidRename.ok).toBe(false);
-  expect(invalidRename.error ?? "").toContain(
-    "name must contain only lowercase letters, digits, and dashes",
-  );
+  const normalizedRename = await wsUpdateSkill(page, originalName, "Legacy_Name", prompt);
+  expect(normalizedRename.ok).toBe(true);
+  expect(normalizedRename.location ?? "").toContain("/skills/legacy-name");
 
-  const validRename = await wsUpdateSkill(page, originalName, validRenamed, `${prompt}-updated`);
+  const validRename = await wsUpdateSkill(page, "legacy-name", validRenamed, `${prompt}-updated`);
   expect(validRename.ok).toBe(true);
 });
 
@@ -1080,17 +1090,29 @@ test("backend normalizes uppercase pipeline step title on insertion", async ({ p
   await expect(editor.locator("textarea[name='prompt']")).toHaveValue("prompt");
 });
 
-test("create pipeline step unhappy path rejects empty title or prompt", async ({ page }) => {
+test("create pipeline step unhappy path rejects empty title", async ({ page }) => {
   const suffix = uniqueSuffix();
   const pipelineID = await createPipelineByRequest(page, `step-invalid-${suffix}`);
 
   const emptyTitle = await wsCreateStep(page, pipelineID, "   ", "valid prompt");
   expect(emptyTitle.ok).toBe(false);
   expect(emptyTitle.error ?? "").toContain("required");
+});
 
-  const emptyPrompt = await wsCreateStep(page, pipelineID, "valid-title", "");
-  expect(emptyPrompt.ok).toBe(false);
-  expect(emptyPrompt.error ?? "").toContain("required");
+test("create pipeline step persists empty description", async ({ page, e2eDataDir }) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(page, `step-empty-desc-${suffix}`);
+  const title = `step-empty-${suffix}`;
+  const r = await wsCreateStep(page, pipelineID, title, "");
+  expect(r.ok).toBe(true);
+
+  const pj = path.join(e2eDataDir, "pipelines", pipelineID, "pipeline.json");
+  const j = JSON.parse(fs.readFileSync(pj, "utf8")) as { steps: { title: string; prompt: string }[] };
+  expect(j.steps[0]?.prompt).toBe("");
+
+  await page.goto(`/pipelines/${pipelineID}`);
+  const editor = page.getByTestId("pipeline-step-editor").first();
+  await expect(editor.locator("textarea[name='prompt']")).toHaveValue("");
 });
 
 test("edit pipeline step happy path persists updated title and prompt", async ({ page }) => {
@@ -1212,7 +1234,7 @@ test("pipeline step title input keeps focus after autosave ui broadcast", async 
     .toBe(true);
 });
 
-test("edit pipeline step unhappy path rejects empty title or prompt and preserves previous values", async ({
+test("edit pipeline step unhappy path rejects empty title and preserves previous values", async ({
   page,
 }) => {
   const suffix = uniqueSuffix();
@@ -1229,14 +1251,33 @@ test("edit pipeline step unhappy path rejects empty title or prompt and preserve
   expect(emptyTitle.ok).toBe(false);
   expect(emptyTitle.error ?? "").toContain("required");
 
-  const emptyPrompt = await wsUpdateStep(page, pipelineID, stepID, "valid-title", "");
-  expect(emptyPrompt.ok).toBe(false);
-  expect(emptyPrompt.error ?? "").toContain("required");
-
   await page.goto(`/pipelines/${pipelineID}`);
   const editor = page.getByTestId("pipeline-step-editor").first();
   await expect(editor.locator("input[name='title']")).toHaveValue(originalTitle);
   await expect(editor.locator("textarea[name='prompt']")).toHaveValue(originalPrompt);
+});
+
+test("edit pipeline step clears description to empty string", async ({ page, e2eDataDir }) => {
+  const suffix = uniqueSuffix();
+  const pipelineID = await createPipelineByRequest(page, `step-clear-prompt-${suffix}`);
+  const originalTitle = `step-clear-prompt-title-${suffix}`;
+  const originalPrompt = `step-clear-prompt-body-${suffix}`;
+  const createStep = await wsCreateStep(page, pipelineID, originalTitle, originalPrompt);
+  expect(createStep.ok).toBe(true);
+  const loc = createStep.location ?? "";
+  const stepID = Number(loc.split("/").pop() ?? "0");
+  expect(Number.isFinite(stepID)).toBe(true);
+
+  const cleared = await wsUpdateStep(page, pipelineID, stepID, originalTitle, "");
+  expect(cleared.ok).toBe(true);
+
+  const pj = path.join(e2eDataDir, "pipelines", pipelineID, "pipeline.json");
+  const j = JSON.parse(fs.readFileSync(pj, "utf8")) as { steps: { title: string; prompt: string }[] };
+  expect(j.steps[0]?.prompt).toBe("");
+
+  await page.goto(`/pipelines/${pipelineID}`);
+  const editor = page.getByTestId("pipeline-step-editor").first();
+  await expect(editor.locator("textarea[name='prompt']")).toHaveValue("");
 });
 
 test("delete pipeline step happy path removes step from main panel and left nav", async ({ page }) => {
@@ -1293,18 +1334,23 @@ test("pipeline step reorder unhappy path rejects invalid step target", async ({ 
   expect(response.error ?? "").toContain("not found");
 });
 
-test("pipeline step skill association happy path increments per-step count", async ({ page }) => {
+test("pipeline step skill association happy path increments per-step count", async ({
+  page,
+  e2eDataDir,
+}) => {
   const suffix = uniqueSuffix();
   const pipelineID = await createPipelineByRequest(page, `step-skill-count-${suffix}`);
   const skillA = await createSkillByRequest(page, `skill-a-${suffix}`, "a prompt");
   const skillB = await createSkillByRequest(page, `skill-b-${suffix}`, "b prompt");
+  const uuidA = readSkillUuidFromDisk(e2eDataDir, skillA);
+  const uuidB = readSkillUuidFromDisk(e2eDataDir, skillB);
   const createStep = await wsCreateStep(page, pipelineID, `skill-step-${suffix}`, "prompt");
   expect(createStep.ok).toBe(true);
   const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
 
-  const addA = await wsAddStepSkill(page, pipelineID, stepID, skillA);
+  const addA = await wsAddStepSkill(page, pipelineID, stepID, uuidA);
   expect(addA.ok).toBe(true);
-  const addB = await wsAddStepSkill(page, pipelineID, stepID, skillB);
+  const addB = await wsAddStepSkill(page, pipelineID, stepID, uuidB);
   expect(addB.ok).toBe(true);
 
   await page.goto(`/pipelines/${pipelineID}`);
@@ -1313,33 +1359,36 @@ test("pipeline step skill association happy path increments per-step count", asy
 
 test("pipeline step skill association unhappy path rejects duplicate skill per step", async ({
   page,
+  e2eDataDir,
 }) => {
   const suffix = uniqueSuffix();
   const pipelineID = await createPipelineByRequest(page, `step-skill-dup-${suffix}`);
-  const skillID = await createSkillByRequest(page, `skill-dup-${suffix}`, "dup prompt");
+  const skillName = await createSkillByRequest(page, `skill-dup-${suffix}`, "dup prompt");
+  const skillUuid = readSkillUuidFromDisk(e2eDataDir, skillName);
   const createStep = await wsCreateStep(page, pipelineID, `dup-step-${suffix}`, "prompt");
   expect(createStep.ok).toBe(true);
   const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
 
-  const first = await wsAddStepSkill(page, pipelineID, stepID, skillID);
+  const first = await wsAddStepSkill(page, pipelineID, stepID, skillUuid);
   expect(first.ok).toBe(true);
 
-  const duplicate = await wsAddStepSkill(page, pipelineID, stepID, skillID);
+  const duplicate = await wsAddStepSkill(page, pipelineID, stepID, skillUuid);
   expect(duplicate.ok).toBe(false);
   expect(duplicate.error ?? "").toContain("already attached");
 });
 
-test("pipeline step rows render accurate skill counts", async ({ page }) => {
+test("pipeline step rows render accurate skill counts", async ({ page, e2eDataDir }) => {
   const suffix = uniqueSuffix();
   const pipelineID = await createPipelineByRequest(page, `step-count-render-${suffix}`);
-  const skillID = await createSkillByRequest(page, `count-skill-${suffix}`, "count prompt");
+  const skillName = await createSkillByRequest(page, `count-skill-${suffix}`, "count prompt");
+  const skillUuid = readSkillUuidFromDisk(e2eDataDir, skillName);
 
   const createOne = await wsCreateStep(page, pipelineID, `count-one-${suffix}`, "prompt-1");
   expect(createOne.ok).toBe(true);
   expect((await wsCreateStep(page, pipelineID, `count-two-${suffix}`, "prompt-2")).ok).toBe(true);
   const stepOneID = Number((createOne.location ?? "").split("/").pop() ?? "0");
 
-  const linkSkill = await wsAddStepSkill(page, pipelineID, stepOneID, skillID);
+  const linkSkill = await wsAddStepSkill(page, pipelineID, stepOneID, skillUuid);
   expect(linkSkill.ok).toBe(true);
 
   await page.goto(`/pipelines/${pipelineID}`);
@@ -1348,20 +1397,24 @@ test("pipeline step rows render accurate skill counts", async ({ page }) => {
   await expect(rows.filter({ hasText: `count-two-${suffix}` }).getByTestId("pipeline-step-skill-count")).toHaveText("0");
 });
 
-test("pipeline step skill count updates after add and remove skill", async ({ page }) => {
+test("pipeline step skill count updates after add and remove skill", async ({
+  page,
+  e2eDataDir,
+}) => {
   const suffix = uniqueSuffix();
   const pipelineID = await createPipelineByRequest(page, `step-count-update-${suffix}`);
   const skillName = await createSkillByRequest(page, `update-skill-${suffix}`, "update prompt");
+  const skillUuid = readSkillUuidFromDisk(e2eDataDir, skillName);
   const createStep = await wsCreateStep(page, pipelineID, `update-step-${suffix}`, "prompt");
   expect(createStep.ok).toBe(true);
   const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
 
-  const add = await wsAddStepSkill(page, pipelineID, stepID, skillName);
+  const add = await wsAddStepSkill(page, pipelineID, stepID, skillUuid);
   expect(add.ok).toBe(true);
   await page.goto(`/pipelines/${pipelineID}`);
   await expect(page.getByTestId("pipeline-step-skill-count")).toContainText("1");
 
-  const remove = await wsDeleteStepSkill(page, pipelineID, stepID, skillName);
+  const remove = await wsDeleteStepSkill(page, pipelineID, stepID, skillUuid);
   expect(remove.ok).toBe(true);
   await page.reload();
   await expect(page.getByTestId("pipeline-step-skill-count")).toContainText("0");
@@ -1463,7 +1516,12 @@ test("add pipeline step skill unhappy path returns 404 for unknown skill", async
   const createStep = await wsCreateStep(page, pipelineID, `step-${suffix}`, "p");
   expect(createStep.ok).toBe(true);
   const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
-  const response = await wsAddStepSkill(page, pipelineID, stepID, `no-such-skill-${suffix}`);
+  const response = await wsAddStepSkill(
+    page,
+    pipelineID,
+    stepID,
+    "00000000-0000-0000-0000-000000000099",
+  );
   expect(response.ok).toBe(false);
   expect(response.error ?? "").toContain("not found");
 });
@@ -1496,11 +1554,13 @@ test("create pipeline step unhappy path returns not found for missing pipeline",
 
 test("delete pipeline step skill unhappy path returns not found for missing step", async ({
   page,
+  e2eDataDir,
 }) => {
   const suffix = uniqueSuffix();
   const pipelineID = await createPipelineByRequest(page, `del-skill-step-${suffix}`);
   const skillName = await createSkillByRequest(page, `del-skill-s-${suffix}`, "p");
-  const r = await wsDeleteStepSkill(page, pipelineID, 999999, skillName);
+  const skillUuid = readSkillUuidFromDisk(e2eDataDir, skillName);
+  const r = await wsDeleteStepSkill(page, pipelineID, 999999, skillUuid);
   expect(r.ok).toBe(false);
   expect(r.error ?? "").toContain("not found");
 });
@@ -1513,7 +1573,12 @@ test("delete pipeline step skill unhappy path returns not found when skill not l
   const createStep = await wsCreateStep(page, pipelineID, `step-${suffix}`, "p");
   expect(createStep.ok).toBe(true);
   const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
-  const r = await wsDeleteStepSkill(page, pipelineID, stepID, `never-attached-${suffix}`);
+  const r = await wsDeleteStepSkill(
+    page,
+    pipelineID,
+    stepID,
+    "00000000-0000-0000-0000-000000000088",
+  );
   expect(r.ok).toBe(false);
   expect(r.error ?? "").toContain("not found");
 });
@@ -1527,20 +1592,21 @@ test("skill rename updates pipeline.json step skill references on disk", async (
   const newName = `rename-new-${suffix}`;
   const pipelineID = await createPipelineByRequest(page, `rename-pipe-${suffix}`);
   await createSkillByRequest(page, oldName, "prompt");
+  const skillUuid = readSkillUuidFromDisk(e2eDataDir, oldName);
   const createStep = await wsCreateStep(page, pipelineID, `st-${suffix}`, "p");
   expect(createStep.ok).toBe(true);
   const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
-  expect((await wsAddStepSkill(page, pipelineID, stepID, oldName)).ok).toBe(true);
+  expect((await wsAddStepSkill(page, pipelineID, stepID, skillUuid)).ok).toBe(true);
 
   const rename = await wsUpdateSkill(page, oldName, newName, "updated");
   expect(rename.ok).toBe(true);
 
   const pj = path.join(e2eDataDir, "pipelines", pipelineID, "pipeline.json");
   const raw = fs.readFileSync(pj, "utf8");
-  const j = JSON.parse(raw) as { steps: Array<{ skills: string[] }> };
+  const j = JSON.parse(raw) as { steps: Array<{ skills: Array<{ alias: string }> }> };
   const skills = j.steps[0]?.skills ?? [];
-  expect(skills).toContain(newName);
-  expect(skills).not.toContain(oldName);
+  expect(skills.some((s) => s.alias === newName)).toBe(true);
+  expect(skills.some((s) => s.alias === oldName)).toBe(false);
 });
 
 test("skill delete removes skill from pipeline.json step lists on disk", async ({
@@ -1551,10 +1617,11 @@ test("skill delete removes skill from pipeline.json step lists on disk", async (
   const skillName = `del-ref-skill-${suffix}`;
   const pipelineID = await createPipelineByRequest(page, `del-ref-pipe-${suffix}`);
   await createSkillByRequest(page, skillName, "prompt");
+  const skillUuid = readSkillUuidFromDisk(e2eDataDir, skillName);
   const createStep = await wsCreateStep(page, pipelineID, `st-${suffix}`, "p");
   expect(createStep.ok).toBe(true);
   const stepID = Number((createStep.location ?? "").split("/").pop() ?? "0");
-  expect((await wsAddStepSkill(page, pipelineID, stepID, skillName)).ok).toBe(true);
+  expect((await wsAddStepSkill(page, pipelineID, stepID, skillUuid)).ok).toBe(true);
 
   const del = await wsCommand(page, {
     op: "delete_skill",
@@ -1565,9 +1632,38 @@ test("skill delete removes skill from pipeline.json step lists on disk", async (
 
   const pj = path.join(e2eDataDir, "pipelines", pipelineID, "pipeline.json");
   const raw = fs.readFileSync(pj, "utf8");
-  const j = JSON.parse(raw) as { steps: Array<{ skills: string[] }> };
+  const j = JSON.parse(raw) as { steps: Array<{ skills: unknown[] }> };
   const skills = j.steps[0]?.skills ?? [];
-  expect(skills).not.toContain(skillName);
+  expect(skills.length).toBe(0);
+});
+
+test("broken pipeline nav link is red and marked with data-broken", async ({
+  page,
+  e2eDataDir,
+}) => {
+  const suffix = uniqueSuffix();
+  const name = `broken-pipe-${suffix}`;
+  fs.mkdirSync(path.join(e2eDataDir, "pipelines", name), { recursive: true });
+  const pj = path.join(e2eDataDir, "pipelines", name, "pipeline.json");
+  fs.writeFileSync(
+    pj,
+    JSON.stringify({
+      steps: [
+        {
+          id: 1,
+          title: "s",
+          prompt: "p",
+          skills: [{ id: "00000000-0000-0000-0000-000000000001", alias: "missing" }],
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  await page.goto("/pipelines");
+  const link = page.getByTestId("pipeline-nav-link").filter({ hasText: name });
+  await expect(link).toHaveAttribute("data-broken", "true");
+  await expect(link).toHaveCSS("color", "rgb(185, 28, 28)");
 });
 
 test("GET /fragments/counter returns incrementing count", async ({ request }) => {

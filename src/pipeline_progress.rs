@@ -1,4 +1,4 @@
-//! Plain stdout progress for `pipelines run` (no alternate screen, no agent stream).
+//! Plain stdout progress for `prime-agent run` (no alternate screen, no agent stream).
 
 use std::io::{self, Write};
 use std::sync::Arc;

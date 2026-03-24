@@ -6,6 +6,7 @@ use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use serde_json::json;
 use std::fs;
+use uuid::Uuid;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -84,14 +85,67 @@ pub fn chmod_x(path: &Path) {
     }
 }
 
+pub const SKILL_ID_FILE: &str = ".prime-agent-skill-id";
+
+/// Create `skills/<name>/` with `SKILL.md` and a stable UUID id file (matches production layout).
+pub fn write_skill_with_id(skills_dir: &Path, name: &str, id: &Uuid, skill_md: &str) {
+    let dir = skills_dir.join(name);
+    fs::create_dir_all(&dir).expect("skill dir");
+    fs::write(dir.join("SKILL.md"), skill_md).expect("SKILL.md");
+    fs::write(dir.join(SKILL_ID_FILE), format!("{id}\n")).expect("skill id file");
+}
+
 pub fn write_pipeline(data_dir: &Path, name: &str, steps: &str) {
     let dir = data_dir.join("pipelines").join(name);
     fs::create_dir_all(&dir).expect("pipeline dir");
     fs::write(dir.join("pipeline.json"), steps).expect("pipeline.json");
 }
 
+/// Latest mtime among `meta.json` and task `*.json` files in a run directory (avoids picking an
+/// older run when `meta.json` and task JSON are written in different order).
+fn run_dir_recency_mtime(slug_dir: &Path) -> SystemTime {
+    let mut best = SystemTime::UNIX_EPOCH;
+    let Ok(rd) = fs::read_dir(slug_dir) else {
+        return best;
+    };
+    for e in rd.flatten() {
+        let path = e.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().is_some_and(|x| x == "json")
+            && let Ok(m) = fs::metadata(&path).and_then(|m| m.modified())
+            && m > best
+        {
+            best = m;
+        }
+    }
+    best
+}
+
+/// After a single `run` in an isolated temp cwd, expects exactly one slug directory under
+/// `.prime-agent/pipelines/`. Panics with directory listing if that is not true.
+pub fn lone_pipeline_run_dir(cwd: &Path) -> PathBuf {
+    let root = cwd.join(".prime-agent/pipelines");
+    let mut dirs: Vec<PathBuf> = fs::read_dir(&root)
+        .unwrap_or_else(|e| panic!("read_dir {:?}: {}", root, e))
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    assert_eq!(
+        dirs.len(),
+        1,
+        "expected exactly one pipeline run directory under {:?}, got {:?}",
+        root,
+        dirs
+    );
+    dirs.pop().expect("one dir")
+}
+
 /// Run artifacts live under `cwd/.prime-agent/pipelines/<adj-noun-slug>/`; find by `meta.json` `pipeline` field.
-/// When several runs exist for the same pipeline, returns the directory whose `meta.json` is **newest** by mtime.
+/// When several runs exist for the same pipeline, returns the directory with the **newest** task/meta activity.
 pub fn pipeline_artifact_dir_for(cwd: &Path, pipeline_name: &str) -> PathBuf {
     let root = cwd.join(".prime-agent/pipelines");
     let rd = fs::read_dir(&root).unwrap_or_else(|e| panic!("read_dir {:?}: {}", root, e));
@@ -108,9 +162,7 @@ pub fn pipeline_artifact_dir_for(cwd: &Path, pipeline_name: &str) -> PathBuf {
         let raw = fs::read_to_string(&meta_path).expect("meta");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("parse meta");
         if v.get("pipeline").and_then(|x| x.as_str()) == Some(pipeline_name) {
-            let mt = fs::metadata(&meta_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let mt = run_dir_recency_mtime(&p);
             let replace = match &best {
                 None => true,
                 Some((prev_p, prev_t)) => mt > *prev_t || (mt == *prev_t && p > *prev_p),
@@ -133,6 +185,7 @@ pub fn stdout_after_version_line(stdout: &[u8]) -> String {
     }
 }
 
+/// Base `prime-agent` invocation with `--data-dir`, `--skills-dir`, and PATH to a mock `cursor-agent`.
 pub fn pipelines_cmd(temp: &TempDir, data_dir: &Path, skills_dir: &Path, bin_dir: &Path) -> Command {
     let path_var = format!(
         "{}:{}",

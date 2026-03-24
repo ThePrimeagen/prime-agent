@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use serde_json::Value;
 
 use crate::pipeline_run::run_cursor_agent_streaming;
 use crate::sync::{git_is_clean, git_is_repo};
@@ -49,15 +48,8 @@ fn idle_commit_secs() -> u64 {
 
 fn load_cursor_config_for_idle() -> Option<(String, String, bool)> {
     let path = Path::new(".prime-agent").join("config.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let v: Value = serde_json::from_str(&raw).ok()?;
-    let model = v.get("model").and_then(|x| x.as_str())?.to_string();
-    let clirunner = v.get("clirunner").and_then(|x| x.as_str())?.to_string();
-    if model.is_empty() || clirunner.is_empty() {
-        return None;
-    }
-    let yolo = v.get("yolo").and_then(Value::as_bool).unwrap_or(true);
-    Some((model, clirunner, yolo))
+    let dot = crate::dot_prime_agent_config::load_merged(&path).ok()?;
+    Some((dot.model, dot.clirunner, dot.yolo))
 }
 
 fn idle_commit_prompt() -> &'static str {

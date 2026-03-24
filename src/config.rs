@@ -109,6 +109,15 @@ pub fn config_path() -> Result<PathBuf> {
     bail!("HOME not set and XDG_CONFIG_HOME not set");
 }
 
+/// Global merged pipeline config: same directory as [`config_path`] but `config.json`.
+pub fn dot_config_json_path() -> Result<PathBuf> {
+    let path = config_path()?;
+    Ok(path
+        .parent()
+        .context("config_path has no parent")?
+        .join("config.json"))
+}
+
 fn expand_path(path: &Path) -> PathBuf {
     let raw = path.to_string_lossy();
     if (raw.starts_with("~/") || raw == "~")

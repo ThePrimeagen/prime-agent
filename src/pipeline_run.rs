@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Write as FmtWrite;
 use std::fs;
-use std::io::{BufRead, BufReader, IsTerminal, Write as IoWrite};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use crate::dot_prime_agent_config::DotPrimeAgentConfig;
 use crate::pipeline_progress::ProgressMsg;
@@ -198,12 +199,12 @@ fn run_plain(
     PipelineStore::validate_kebab_name(pipeline_name)?;
     let store = PipelineStore::new(data_dir);
     store.get_pipeline_meta(pipeline_name)?;
-    let steps = store.list_steps(pipeline_name)?;
+    let steps = store.list_steps(skills_store, pipeline_name)?;
     if steps.is_empty() {
         bail!("pipeline '{pipeline_name}' has no steps");
     }
 
-    validate_attached_skills(skills_store, &steps)?;
+    validate_attached_skills(pipeline_name, &steps)?;
 
     let (out_dir, run_name) = resolve_pipeline_run_dir(cwd)?;
     let meta_path = out_dir.join("meta.json");
@@ -261,31 +262,22 @@ fn run_plain(
     tx_result
 }
 
-/// Fail fast if any referenced skill file is missing (`cursor-agent` is never started for that step).
-pub fn validate_attached_skills(
-    skills_store: &SkillsStore,
-    steps: &[PipelineStepView],
-) -> Result<()> {
-    let mut names: Vec<String> = steps
-        .iter()
-        .flat_map(|s| s.skills.iter().map(|sk| sk.name.clone()))
-        .collect();
-    names.sort();
-    names.dedup();
-    for name in names {
-        if skills_store.skill_exists(&name) {
-            continue;
+/// Fail fast if any referenced skill UUID does not resolve on disk (`cursor-agent` is never started).
+pub fn validate_attached_skills(pipeline_name: &str, steps: &[PipelineStepView]) -> Result<()> {
+    for step in steps {
+        for sk in &step.skills {
+            if sk.resolved_name.is_some() {
+                continue;
+            }
+            bail!(
+                "pipeline '{pipeline_name}' is broken: step id {} ({}) references missing skill id {} (last known alias '{}'). \
+                 cursor-agent was not started.",
+                step.id,
+                step.title,
+                sk.id,
+                sk.alias
+            );
         }
-        let path = skills_store.skill_path(&name);
-        let root = skills_store.root();
-        bail!(
-            "pipeline references skill '{name}' but SKILL.md was not found at {}. \
-             cursor-agent was not started. \
-             skills directory is {}. \
-             Add the skill folder and SKILL.md, or set --skills-dir / config skills-dir.",
-            path.display(),
-            root.display()
-        );
     }
     Ok(())
 }
@@ -528,7 +520,11 @@ pub(crate) fn build_stage_task_builds(
             parts,
         });
     } else {
-        let mut names: Vec<String> = step.skills.iter().map(|s| s.name.clone()).collect();
+        let mut names: Vec<String> = step
+            .skills
+            .iter()
+            .filter_map(|s| s.resolved_name.clone())
+            .collect();
         names.sort();
         for skill_name in names {
             debug_log(
@@ -543,7 +539,7 @@ pub(crate) fn build_stage_task_builds(
             })?;
             let parts = prompt_parts(user_prompt, Some((&skill_name, &skill_body)), step, prior);
             specs.push(TaskBuild {
-                skill_label: skill_name,
+                skill_label: skill_name.clone(),
                 skill_prompt: skill_body,
                 parts,
             });
@@ -575,26 +571,32 @@ pub(crate) fn build_prompt(
     prior: &str,
 ) -> String {
     let mut s = String::new();
-    s.push_str("## User prompt\n\n");
-    s.push_str(user);
-    s.push_str("\n\n");
+    let prior_trim = prior.trim();
+    if !prior_trim.is_empty() {
+        s.push_str("<Context>\n");
+        s.push_str(prior_trim);
+        s.push_str("\n</Context>\n\n");
+    }
+    let pipe_trim = step.prompt.trim();
+    if !pipe_trim.is_empty() {
+        s.push_str("## Pipeline prompt\n\n");
+        s.push_str("**Step:** ");
+        s.push_str(&step.title);
+        s.push_str("\n\n");
+        s.push_str(pipe_trim);
+        s.push_str("\n\n");
+    }
     if let Some((name, body)) = skill {
-        s.push_str("## Skill (");
+        s.push_str("## Skill prompt\n\n");
+        s.push_str("**Skill:** ");
         s.push_str(name);
-        s.push_str(")\n\n");
+        s.push_str("\n\n");
         s.push_str(body);
         s.push_str("\n\n");
     }
-    s.push_str("## Pipeline step (");
-    s.push_str(&step.title);
-    s.push_str(")\n\n");
-    s.push_str(&step.prompt);
-    s.push_str("\n\n");
-    if !prior.is_empty() {
-        s.push_str("## Previous stage outputs (JSON files by stage)\n\n");
-        s.push_str(prior);
-        s.push('\n');
-    }
+    s.push_str("## User prompt\n\n");
+    s.push_str(user);
+    s.push('\n');
     s
 }
 
@@ -610,6 +612,17 @@ pub(crate) fn format_cursor_agent_invocation(
         dot.model,
         workspace.display()
     )
+}
+
+/// Extract display text from a task JSON object for `<Context>` (not the full record).
+pub(crate) fn prior_task_body_for_context(v: &Value) -> String {
+    if let Some(out) = v.get("output").and_then(|o| o.as_str())
+        && !out.trim().is_empty()
+    {
+        return out.to_string();
+    }
+    let stdout = v.get("stdout").and_then(|s| s.as_str()).unwrap_or("");
+    parse_agent_text(stdout)
 }
 
 pub(crate) fn read_prior_stage_json(out_dir: &Path, last_inclusive: u32) -> Result<String> {
@@ -639,12 +652,16 @@ pub(crate) fn read_prior_stage_json(out_dir: &Path, last_inclusive: u32) -> Resu
         pairs.sort_by_key(|(n, _)| *n);
         for (_, p) in pairs {
             let raw = fs::read_to_string(&p).with_context(|| format!("read '{}'", p.display()))?;
+            let body = match serde_json::from_str::<Value>(&raw) {
+                Ok(v) => prior_task_body_for_context(&v),
+                Err(_) => raw.trim().to_string(),
+            };
             let _ = writeln!(
                 acc,
                 "### Task file {}\n",
                 p.file_name().and_then(|n| n.to_str()).unwrap_or("?")
             );
-            acc.push_str(&raw);
+            acc.push_str(&body);
             acc.push_str("\n\n");
         }
     }
@@ -665,35 +682,49 @@ pub(crate) fn run_cursor_agent_streaming(
     yolo: bool,
     debug_stream: Option<DebugStreamCtx>,
 ) -> (String, String, i32, Result<String, String>) {
-    let mut cmd = Command::new(binary);
-    cmd.arg("--print");
-    if yolo {
-        cmd.arg("--force");
-    }
-    let mut child = match cmd
-        .arg("--model")
-        .arg(model)
-        .arg("--output-format")
-        .arg("json")
-        .arg("--workspace")
-        .arg(workspace)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                String::new(),
-                String::new(),
-                -1,
-                Err(format!("spawn {binary}: {e}")),
-            );
+    let mut child = None;
+    for attempt in 0u32..8 {
+        let mut cmd = Command::new(binary);
+        cmd.arg("--print");
+        if yolo {
+            cmd.arg("--force");
         }
-    };
+        match cmd
+            .arg("--model")
+            .arg(model)
+            .arg("--output-format")
+            .arg("json")
+            .arg("--workspace")
+            .arg(workspace)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => {
+                child = Some(c);
+                break;
+            }
+            Err(e) => {
+                let retry =
+                    e.raw_os_error() == Some(26) || e.to_string().contains("Text file busy");
+                if retry && attempt + 1 < 8 {
+                    thread::sleep(Duration::from_millis(3u64 + u64::from(attempt) * 4));
+                    continue;
+                }
+                return (
+                    String::new(),
+                    String::new(),
+                    -1,
+                    Err(format!("spawn {binary}: {e}")),
+                );
+            }
+        }
+    }
+    let mut child = child.expect("spawn loop must set child or return");
 
     let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.wait();
         return (
             String::new(),
             String::new(),
@@ -702,6 +733,8 @@ pub(crate) fn run_cursor_agent_streaming(
         );
     };
     if let Err(e) = std::io::Write::write_all(&mut stdin, prompt.as_bytes()) {
+        drop(stdin);
+        let _ = child.wait();
         return (
             String::new(),
             String::new(),
@@ -712,6 +745,7 @@ pub(crate) fn run_cursor_agent_streaming(
     drop(stdin);
 
     let Some(stdout_pipe) = child.stdout.take() else {
+        let _ = child.wait();
         return (
             String::new(),
             String::new(),
@@ -720,6 +754,7 @@ pub(crate) fn run_cursor_agent_streaming(
         );
     };
     let Some(stderr_pipe) = child.stderr.take() else {
+        let _ = child.wait();
         return (
             String::new(),
             String::new(),
@@ -753,17 +788,15 @@ pub(crate) fn run_cursor_agent_streaming(
 
     let stderr_handle = thread::spawn(move || {
         let mut acc = String::new();
-        let reader = BufReader::new(stderr_pipe);
-        for line in reader.lines() {
-            let line = line.unwrap_or_default();
-            if let Some(ref ctx) = stderr_debug {
-                debug_stream_line(ctx, "stderr", &line);
+        let mut reader = BufReader::new(stderr_pipe);
+        let _ = reader.read_to_string(&mut acc);
+        if let Some(ref ctx) = stderr_debug {
+            for line in acc.lines() {
+                debug_stream_line(ctx, "stderr", line);
             }
-            acc.push_str(&line);
-            acc.push('\n');
-            if let Some(ref c) = stderr_line_count {
-                c.fetch_add(1, Ordering::Relaxed);
-            }
+        }
+        if let Some(ref c) = stderr_line_count {
+            c.fetch_add(acc.lines().count(), Ordering::Relaxed);
         }
         acc
     });
@@ -791,24 +824,49 @@ pub(crate) fn run_cursor_agent_streaming(
     (stdout, stderr, code, Ok(parsed))
 }
 
+fn try_extract_from_json_value(v: &Value) -> Option<String> {
+    if let Some(s) = v.get("text").and_then(|t| t.as_str()) {
+        return Some(s.to_string());
+    }
+    if let Some(s) = v.get("message").and_then(|t| t.as_str()) {
+        return Some(s.to_string());
+    }
+    if let Some(s) = v.get("response").and_then(|t| t.as_str()) {
+        return Some(s.to_string());
+    }
+    if let Some(s) = v.get("result").and_then(|t| t.as_str()) {
+        return Some(s.to_string());
+    }
+    if let Some(choices) = v.get("choices").and_then(|c| c.as_array())
+        && let Some(first) = choices.first()
+        && let Some(s) = first.get("text").and_then(|t| t.as_str())
+    {
+        return Some(s.to_string());
+    }
+    None
+}
+
 pub(crate) fn parse_agent_text(stdout: &str) -> String {
     let trimmed = stdout.trim();
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        if let Some(s) = v.get("text").and_then(|t| t.as_str()) {
-            return s.to_string();
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed)
+        && let Some(s) = try_extract_from_json_value(&v)
+    {
+        return s;
+    }
+    let mut last_line_extract: Option<String> = None;
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
-        if let Some(s) = v.get("message").and_then(|t| t.as_str()) {
-            return s.to_string();
-        }
-        if let Some(s) = v.get("response").and_then(|t| t.as_str()) {
-            return s.to_string();
-        }
-        if let Some(choices) = v.get("choices").and_then(|c| c.as_array())
-            && let Some(first) = choices.first()
-            && let Some(s) = first.get("text").and_then(|t| t.as_str())
+        if let Ok(v) = serde_json::from_str::<Value>(line)
+            && let Some(s) = try_extract_from_json_value(&v)
         {
-            return s.to_string();
+            last_line_extract = Some(s);
         }
+    }
+    if let Some(s) = last_line_extract {
+        return s;
     }
     trimmed.to_string()
 }
@@ -859,9 +917,26 @@ pub(crate) fn generate_run_name() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_run_name_with_rng;
+    use super::{
+        build_prompt, generate_run_name_with_rng, parse_agent_text, prior_task_body_for_context,
+        read_prior_stage_json,
+    };
+    use crate::pipeline_store::PipelineStepView;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
+    use serde_json::json;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn step_view(title: &str, prompt: &str) -> PipelineStepView {
+        PipelineStepView {
+            id: 1,
+            title: title.to_string(),
+            prompt: prompt.to_string(),
+            skill_count: 0,
+            skills: vec![],
+        }
+    }
 
     #[test]
     fn generate_run_name_seeded_is_deterministic() {
@@ -879,5 +954,106 @@ mod tests {
         let x = generate_run_name_with_rng(&mut rng);
         let y = generate_run_name_with_rng(&mut rng);
         assert_ne!(x, y);
+    }
+
+    #[test]
+    fn parse_agent_text_extracts_cursor_result_field() {
+        let j = r#"{"type":"result","subtype":"success","result":"hello"}"#;
+        assert_eq!(parse_agent_text(j), "hello");
+    }
+
+    #[test]
+    fn parse_agent_text_ndjson_last_line_wins() {
+        let s = "{\"noise\":1}\n{\"type\":\"result\",\"result\":\"last\"}\n";
+        assert_eq!(parse_agent_text(s), "last");
+    }
+
+    #[test]
+    fn parse_agent_text_nonjson_returns_trimmed_raw() {
+        assert_eq!(parse_agent_text("  plain  "), "plain");
+    }
+
+    #[test]
+    fn prior_task_body_prefers_output_over_stdout() {
+        let v = json!({
+            "output": "out-field",
+            "stdout": "{\"text\":\"from-stdout\"}"
+        });
+        assert_eq!(prior_task_body_for_context(&v), "out-field");
+    }
+
+    #[test]
+    fn prior_task_body_parses_stdout_when_output_empty() {
+        let v = json!({
+            "output": "",
+            "stdout": "{\"result\":\"from-out\"}"
+        });
+        assert_eq!(prior_task_body_for_context(&v), "from-out");
+    }
+
+    #[test]
+    fn read_prior_stage_json_uses_extracted_body_not_raw_json() {
+        let dir = TempDir::new().expect("temp");
+        let task = json!({
+            "stdout": "{\"text\":\"agent-said\"}",
+            "output": null,
+            "code": 0
+        });
+        fs::write(
+            dir.path().join("1_1.json"),
+            serde_json::to_string_pretty(&task).expect("json"),
+        )
+        .expect("write");
+        let got = read_prior_stage_json(dir.path(), 1).expect("read");
+        assert!(got.contains("agent-said"));
+        assert!(!got.contains("\"stdout\":"));
+    }
+
+    #[test]
+    fn build_prompt_omits_context_when_prior_empty() {
+        let step = step_view("s", "pipe");
+        let p = build_prompt("u", None, &step, "");
+        assert!(!p.contains("<Context>"));
+        assert!(p.contains("## Pipeline prompt"));
+    }
+
+    #[test]
+    fn build_prompt_order_context_pipeline_skill_user() {
+        let step = step_view("my-step", "pipe-body");
+        let prior = "### Task file 1_1.json\n\nprior-text\n\n";
+        let p = build_prompt("user-body", Some(("sk", "skill-body")), &step, prior);
+        let ctx = p.find("<Context>").expect("context");
+        let pipe = p.find("## Pipeline prompt").expect("pipe");
+        let sk = p.find("## Skill prompt").expect("skill");
+        let us = p.find("## User prompt").expect("user");
+        assert!(ctx < pipe && pipe < sk && sk < us);
+        assert!(p.contains("prior-text"));
+        assert!(p.contains("pipe-body"));
+        assert!(p.contains("skill-body"));
+        assert!(p.contains("user-body"));
+    }
+
+    #[test]
+    fn build_prompt_skips_pipeline_when_step_prompt_empty() {
+        let step = step_view("t", "");
+        let p = build_prompt("u", None, &step, "");
+        assert!(!p.contains("## Pipeline prompt"));
+        assert!(p.contains("## User prompt"));
+    }
+
+    #[test]
+    fn build_prompt_skips_skill_when_none() {
+        let step = step_view("t", "p");
+        let p = build_prompt("u", None, &step, "");
+        assert!(!p.contains("## Skill prompt"));
+    }
+
+    #[test]
+    fn build_prompt_includes_skill_with_metadata() {
+        let step = step_view("st", "pv");
+        let p = build_prompt("uu", Some(("alpha", "body")), &step, "");
+        assert!(p.contains("## Skill prompt"));
+        assert!(p.contains("**Skill:** alpha"));
+        assert!(p.contains("body"));
     }
 }

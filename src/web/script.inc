@@ -661,7 +661,7 @@
           primeAriaCurrent(a, "pipelines") +
           '"\n            style="display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;text-decoration:none;color:inherit;">&#x2554;&#x2557;</a>\n        </div>\n\n        <section id="skills-nav-panel" data-tab-panel="skills"' +
           primeHiddenAttr(a, "skills") +
-          ">\n          <h2 style=\"margin-top:0;\">Skills</h2>\n          <button\n            type=\"button\"\n            data-testid=\"skill-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('skill-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"skill-modal\">\n            <form data-ws-form=\"create_skill\">\n              <h3>Create Skill</h3>\n              <label>Name<br><input name=\"name\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('skill-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n";
+          ">\n          <h2 style=\"margin-top:0;\">Skills</h2>\n          <button\n            type=\"button\"\n            data-testid=\"skill-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('skill-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"skill-modal\">\n            <form data-ws-form=\"create_skill\">\n              <h3>Create Skill</h3>\n              <label>Name<br><input name=\"name\" data-lowercase-field=\"skill-name\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('skill-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n";
         if (skills.length > 0) {
           o +=
             '          <ul id="skills-nav-list" style="padding-left:0;margin-top:1rem;">\n';
@@ -689,13 +689,22 @@
             '          <ul id="pipeline-nav-list" style="padding-left:0;margin-top:1rem;">\n';
           for (const pl of pipelines) {
             const isSel = selPipe && selPipe.name === pl.name;
+            const broken = pl.broken === true;
+            const pipeStyle = broken
+              ? "display:block;padding:0.4rem 0.5rem;border:1px solid #fca5a5;border-radius:6px;text-decoration:none;color:#b91c1c;"
+              : "display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;";
+            const label = broken ? primeEscHtml(pl.name) + " !" : primeEscHtml(pl.name);
             o +=
-              '            <li style="list-style:none;margin-top:0.5rem;">\n              <a\n                data-testid="pipeline-nav-link"\n                data-selected="' +
+              '            <li style="list-style:none;margin-top:0.5rem;">\n              <a\n                data-testid="pipeline-nav-link"\n                data-broken="' +
+              (broken ? "true" : "false") +
+              '"\n                data-selected="' +
               (isSel ? "true" : "false") +
               '"\n                href="/pipelines/' +
               pl.name_encoded +
-              '"\n                style="display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;">' +
-              primeEscHtml(pl.name) +
+              '"\n                style="' +
+              pipeStyle +
+              '">' +
+              label +
               "</a>\n            </li>\n";
           }
           o += "          </ul>\n";
@@ -749,14 +758,14 @@
           const sk = selSkill;
           o +=
             '          <article data-skill-editor data-skill-id="' +
-            primeEscAttr(sk.name) +
+            primeEscAttr(sk.id) +
             '" style="max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;">\n            <form data-skill-form data-ws-form="update_skill" data-old-name="' +
             primeEscAttr(sk.name) +
             '" data-skill-location="/skills/' +
             sk.name_encoded +
             '">\n              <label>Name<br><input name="name" value="' +
             primeEscAttr(sk.name) +
-            '" required></label><br><br>\n              <label>Prompt<br><textarea name="prompt" rows="8" cols="70" required>' +
+            '" data-lowercase-field="skill-name" required></label><br><br>\n              <label>Prompt<br><textarea name="prompt" rows="8" cols="70" required>' +
             primeEscHtml(sk.prompt) +
             '</textarea></label><br><br>\n              <div style="position:absolute;top:0.5rem;right:0.6rem;display:flex;align-items:flex-start;gap:0.35rem;">\n                <div data-delete-controls style="position:relative;">\n                  <button\n                    type="button"\n                    data-testid="delete-skill-trigger"\n                    aria-label="Delete skill"\n                    aria-haspopup="dialog"\n                    aria-expanded="false"\n                    title="Delete skill"\n                    style="border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:0.85rem;line-height:1;padding:0;">&#128465;</button>\n                  <div\n                    data-testid="delete-skill-popover"\n                    data-delete-popover\n                    hidden\n                    style="position:absolute;top:1.1rem;right:0;background:#fff;border:1px solid #d1d5db;border-radius:6px;padding:0.45rem;box-shadow:0 2px 8px rgba(0,0,0,0.12);z-index:10;max-width:260px;">\n                    <p data-testid="delete-skill-warning" style="margin:0 0 0.45rem 0;font-size:0.72rem;line-height:1.35;color:#374151;">Delete this skill? This is permanent and removes the skill folder and SKILL.md.</p>\n                    <button\n                      type="button"\n                      data-delete-confirm\n                      data-testid="delete-skill-confirm"\n                      style="border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;">Delete permanently</button>\n                  </div>\n                </div>\n              </div>\n            </form>\n            <form data-skill-delete-form data-ws-form="delete_skill" data-skill-name="' +
             primeEscAttr(sk.name) +
@@ -781,7 +790,7 @@
             primeEscAttr(pl.name) +
             '" data-lowercase-field="pipeline-name" data-testid="pipeline-rename-name"></label><br><br>\n              <button type="submit" data-testid="pipeline-rename-save">Rename</button>\n            </form>\n          </article>\n          <button\n            type="button"\n            data-testid="pipeline-step-create-open"\n            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"\n            onclick="document.getElementById(\'pipeline-step-modal\').showModal();">Add Step</button>\n\n          <dialog id="pipeline-step-modal">\n            <form data-ws-form="create_step" data-pipeline="' +
             primeEscAttr(pl.name) +
-            '">\n              <h3>Create Step</h3>\n              <label>Title<br><input name="title" data-lowercase-field="pipeline-step-title" required></label><br><br>\n              <label>Prompt<br><textarea name="prompt" rows="6" cols="40" required></textarea></label><br><br>\n              <button type="submit">Save</button>\n              <button type="button" onclick="document.getElementById(\'pipeline-step-modal\').close();">Cancel</button>\n            </form>\n          </dialog>\n\n';
+            '">\n              <h3>Create Step</h3>\n              <label>Title<br><input name="title" data-lowercase-field="pipeline-step-title" required></label><br><br>\n              <label>Prompt<br><textarea name="prompt" rows="6" cols="40"></textarea></label><br><br>\n              <button type="submit">Save</button>\n              <button type="button" onclick="document.getElementById(\'pipeline-step-modal\').close();">Cancel</button>\n            </form>\n          </dialog>\n\n';
           if (steps.length > 0) {
             for (const step of steps) {
               o +=
@@ -791,7 +800,7 @@
                 step.id +
                 '">\n                <label>Title<br><input name="title" data-lowercase-field="pipeline-step-title" value="' +
                 primeEscAttr(step.title) +
-                '" required></label><br><br>\n                <label>Description<br><textarea name="prompt" rows="6" cols="70" required>' +
+                '" required></label><br><br>\n                <label>Description<br><textarea name="prompt" rows="6" cols="70">' +
                 primeEscHtml(step.prompt) +
                 '</textarea></label><br><br>\n                <button type="submit" data-testid="pipeline-step-save">Save</button>\n              </form>\n              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">\n                <form data-ws-form="add_step_skill" data-pipeline="' +
                 primeEscAttr(pl.name) +
@@ -801,7 +810,7 @@
               for (const sk of skills) {
                 o +=
                   '                    <option value="' +
-                  primeEscAttr(sk.name) +
+                  primeEscAttr(sk.id) +
                   '">' +
                   primeEscHtml(sk.name) +
                   "</option>\n";
@@ -823,8 +832,8 @@
                     primeEscAttr(pl.name) +
                     '" data-step-id="' +
                     step.id +
-                    '" data-skill-name="' +
-                    primeEscAttr(att.name) +
+                    '" data-skill-id="' +
+                    primeEscAttr(att.id) +
                     '" style="display:inline;">\n                    <button type="submit" style="margin-left:0.4rem;border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;">Remove</button>\n                  </form>\n                </li>\n';
                 }
                 o += "              </ul>\n";
@@ -1684,13 +1693,13 @@
           if (ws === "delete_step_skill") {
             const pipeline = form.getAttribute("data-pipeline") || "";
             const stepId = parseInt(form.getAttribute("data-step-id") || "0", 10);
-            const skillName = form.getAttribute("data-skill-name") || "";
+            const skillId = form.getAttribute("data-skill-id") || "";
             sendPrime({
               op: "delete_step_skill",
               id: id,
               pipeline: pipeline,
               step_id: stepId,
-              skill_name: skillName
+              skill_id: skillId
             });
             return;
           }
@@ -1706,7 +1715,7 @@
 
       function wireLowercaseInputs() {
         const lowercaseFields = document.querySelectorAll(
-          "input[data-lowercase-field='pipeline-name'], input[data-lowercase-field='pipeline-step-title']"
+          "input[data-lowercase-field='pipeline-name'], input[data-lowercase-field='pipeline-step-title'], input[data-lowercase-field='skill-name']"
         );
         for (const field of lowercaseFields) {
           if (field.dataset.primeLowerWired === "1") {

@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+use uuid::Uuid;
 
 const PIPELINE_NAME: &str = "live-e2e-words";
 
@@ -30,10 +31,11 @@ fn output_dir_for_pipeline(root: &Path, pipeline_name: &str) -> PathBuf {
     panic!("no run dir for pipeline '{pipeline_name}' under {base:?}");
 }
 
-fn write_skill(skills_root: &Path, name: &str, body: &str) {
+fn write_skill(skills_root: &Path, name: &str, id: Uuid, body: &str) {
     let dir = skills_root.join(name);
     fs::create_dir_all(&dir).expect("skill dir");
     fs::write(dir.join("SKILL.md"), body).expect("SKILL.md");
+    fs::write(dir.join(".prime-agent-skill-id"), format!("{id}\n")).expect("skill id");
 }
 
 #[test]
@@ -49,53 +51,64 @@ fn live_cursor_pipeline_three_skills_then_aggregate() {
     let skills_dir = data_dir.join("skills");
     fs::create_dir_all(&skills_dir).expect("skills");
 
+    let id_a = Uuid::parse_str("00000000-0000-4000-8000-00000000c0a1").expect("uuid");
+    let id_b = Uuid::parse_str("00000000-0000-4000-8000-00000000c0b2").expect("uuid");
+    let id_c = Uuid::parse_str("00000000-0000-4000-8000-00000000c0c3").expect("uuid");
+    let id_d = Uuid::parse_str("00000000-0000-4000-8000-00000000c0d4").expect("uuid");
     write_skill(
         &skills_dir,
         "skill-a",
+        id_a,
         "Respond with a single word, nothing else, just say 'alfa'\n",
     );
     write_skill(
         &skills_dir,
         "skill-b",
+        id_b,
         "Respond with a single word, nothing else, just say 'bravo'\n",
     );
     write_skill(
         &skills_dir,
         "skill-c",
+        id_c,
         "Respond with a single word, nothing else, just say 'charlie'\n",
     );
     write_skill(
         &skills_dir,
         "skill-d",
+        id_d,
         "## Aggregate\n\n\
-         The prompt includes previous stage task JSON below. Read the three single-word \
+         The prompt includes prior stage outputs inside a `<Context>` block. Read the three single-word \
          outputs from stage 1 and respond with a JSON array of those words sorted \
          alphabetically, e.g. [\"alfa\",\"bravo\",\"charlie\"]. Nothing else.\n",
     );
 
     let pipeline_dir = data_dir.join("pipelines").join(PIPELINE_NAME);
     fs::create_dir_all(&pipeline_dir).expect("pipeline dir");
-    fs::write(
-        pipeline_dir.join("pipeline.json"),
-        r#"{
+    let pipeline_body = format!(
+        r#"{{
   "steps": [
-    {
+    {{
       "id": 1,
       "title": "words",
       "prompt": "Execute each attached skill.",
-      "skills": ["skill-a", "skill-b", "skill-c"]
-    },
-    {
+      "skills": [
+        {{"id":"{id_a}","alias":"skill-a"}},
+        {{"id":"{id_b}","alias":"skill-b"}},
+        {{"id":"{id_c}","alias":"skill-c"}}
+      ]
+    }},
+    {{
       "id": 2,
       "title": "aggregate",
       "prompt": "Use skill-d to combine prior outputs.",
-      "skills": ["skill-d"]
-    }
+      "skills": [{{"id":"{id_d}","alias":"skill-d"}}]
+    }}
   ]
-}
-"#,
-    )
-    .expect("pipeline.json");
+}}
+"#
+    );
+    fs::write(pipeline_dir.join("pipeline.json"), pipeline_body).expect("pipeline.json");
 
     let dot = root.join(".prime-agent");
     fs::create_dir_all(&dot).expect(".prime-agent");
@@ -121,7 +134,6 @@ fn live_cursor_pipeline_three_skills_then_aggregate() {
         .args([
             "--data-dir",
             data_dir.to_str().expect("utf8"),
-            "pipelines",
             "run",
             PIPELINE_NAME,
             "--prompt",

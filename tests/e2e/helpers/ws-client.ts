@@ -212,7 +212,7 @@ export async function wsDeleteStepSkill(
   page: Page,
   pipeline: string,
   stepId: number,
-  skillName: string,
+  skillId: string,
 ): Promise<{ ok: boolean; location?: string; error?: string }> {
   const id = nextId();
   const r = await wsCommand(page, {
@@ -220,7 +220,7 @@ export async function wsDeleteStepSkill(
     id,
     pipeline,
     step_id: stepId,
-    skill_name: skillName,
+    skill_id: skillId,
   });
   return { ok: r.ok, location: r.location, error: r.error };
 }

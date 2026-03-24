@@ -3,42 +3,30 @@ mod common;
 use assert_cmd::cargo::cargo_bin_cmd;
 use common::{
     chmod_x, pipeline_artifact_dir_for, pipelines_cmd, write_dot_prime_agent_config,
-    write_dot_prime_agent_config_yolo, write_pipeline,
+    write_dot_prime_agent_config_yolo, write_pipeline, write_skill_with_id,
 };
 use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 #[test]
-fn pipelines_run_data_dir_skills_overrides_global_config_skills_dir() {
+fn pipelines_run_resolves_skills_under_explicit_data_dir() {
     let temp = TempDir::new().expect("temp");
     let data_dir = temp.path().join("skill-issues");
     let skills_under_data = data_dir.join("skills");
-    fs::create_dir_all(skills_under_data.join("attached-skill")).expect("skill dir");
-    fs::write(skills_under_data.join("attached-skill/SKILL.md"), "x\n").expect("skill");
-
-    let wrong_skills = temp.path().join("other-skills");
-    fs::create_dir_all(&wrong_skills).expect("wrong");
+    let sid = Uuid::parse_str("00000000-0000-4000-8000-00000000a111").expect("uuid");
+    write_skill_with_id(&skills_under_data, "attached-skill", &sid, "x\n");
 
     let config_home = temp.path().join("xdg_config");
     fs::create_dir_all(config_home.join("prime-agent")).expect("prime cfg dir");
-    let cfg = config_home.join("prime-agent/config.json");
-    let cfg_json = json!({
-        "skills-dir": wrong_skills.to_string_lossy().to_string(),
-    });
-    fs::write(
-        &cfg,
-        format!("{}\n", serde_json::to_string_pretty(&cfg_json).unwrap()),
-    )
-    .expect("cfg");
 
     write_dot_prime_agent_config(&temp, "m", "cursor-agent");
-    write_pipeline(
-        &data_dir,
-        "pl",
-        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":["attached-skill"]}]}"#,
+    let pj = format!(
+        r#"{{"steps":[{{"id":1,"title":"a","prompt":"p","skills":[{{"id":"{sid}","alias":"attached-skill"}}]}}]}}"#
     );
+    write_pipeline(&data_dir, "pl", &pj);
     let bin = temp.path().join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let mock = bin.join("cursor-agent");
@@ -62,7 +50,6 @@ fn pipelines_run_data_dir_skills_overrides_global_config_skills_dir() {
         .args([
             "--data-dir",
             data_dir.to_str().expect("utf8 path"),
-            "pipelines",
             "run",
             "pl",
             "--prompt",
@@ -94,7 +81,7 @@ fn pipelines_run_writes_stage_files_under_pipeline_dir() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "demo-pipe", "--prompt", "userhi"]);
+    cmd.args(["run", "demo-pipe", "--prompt", "userhi"]);
     cmd.assert().success();
 
     let one = pipeline_artifact_dir_for(temp.path(), "demo-pipe").join("1_1.json");
@@ -131,11 +118,11 @@ fn pipelines_second_run_same_prompt_invokes_agent_again() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "demo-pipe", "--prompt", "userhi"]);
+    cmd.args(["run", "demo-pipe", "--prompt", "userhi"]);
     cmd.assert().success();
 
     let mut cmd2 = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd2.args(["pipelines", "run", "demo-pipe", "--prompt", "userhi"]);
+    cmd2.args(["run", "demo-pipe", "--prompt", "userhi"]);
     cmd2.assert().success();
 
     let n = fs::read_to_string(&calls_log).expect("calls log");
@@ -166,7 +153,7 @@ fn pipelines_two_runs_create_distinct_artifact_directories() {
 
     for _ in 0..2 {
         let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-        cmd.args(["pipelines", "run", "demo-pipe", "--prompt", "userhi"]);
+        cmd.args(["run", "demo-pipe", "--prompt", "userhi"]);
         cmd.assert().success();
     }
 
@@ -201,16 +188,15 @@ fn pipelines_run_parallel_skills_two_outputs() {
     let temp = TempDir::new().expect("temp");
     let data_dir = temp.path().join("data");
     let skills_dir = temp.path().join("skills");
-    fs::create_dir_all(skills_dir.join("alpha")).expect("a");
-    fs::create_dir_all(skills_dir.join("beta")).expect("b");
-    fs::write(skills_dir.join("alpha/SKILL.md"), "A\n").expect("a");
-    fs::write(skills_dir.join("beta/SKILL.md"), "B\n").expect("b");
+    let id_a = Uuid::parse_str("00000000-0000-4000-8000-00000000aa01").expect("a");
+    let id_b = Uuid::parse_str("00000000-0000-4000-8000-00000000bb02").expect("b");
+    write_skill_with_id(&skills_dir, "alpha", &id_a, "A\n");
+    write_skill_with_id(&skills_dir, "beta", &id_b, "B\n");
     write_dot_prime_agent_config(&temp, "m", "cursor-agent");
-    write_pipeline(
-        &data_dir,
-        "pl",
-        r#"{"steps":[{"id":1,"title":"t","prompt":"p","skills":["beta","alpha"]}]}"#,
+    let pj = format!(
+        r#"{{"steps":[{{"id":1,"title":"t","prompt":"p","skills":[{{"id":"{id_b}","alias":"beta"}},{{"id":"{id_a}","alias":"alpha"}}]}}]}}"#
     );
+    write_pipeline(&data_dir, "pl", &pj);
     let bin = temp.path().join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let mock = bin.join("cursor-agent");
@@ -222,7 +208,7 @@ fn pipelines_run_parallel_skills_two_outputs() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     cmd.assert().success();
 
     let out_dir = pipeline_artifact_dir_for(temp.path(), "pl");
@@ -264,14 +250,57 @@ fn pipelines_run_second_stage_receives_prior_stage_files_in_prompt() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     cmd.assert().success();
 
     let stage2 = fs::read_to_string(&stdin_log).expect("stdin");
     assert!(
-        stage2.contains("### Task file 1_1.json") || stage2.contains("\"code\":0"),
-        "expected prior stage content in stage-2 prompt: {stage2}"
+        stage2.contains("<Context>") && stage2.contains("</Context>"),
+        "expected Context wrapper in stage-2 prompt: {stage2}"
     );
+    assert!(
+        stage2.contains("ok"),
+        "expected extracted prior output text in stage-2 prompt: {stage2}"
+    );
+    assert!(
+        !stage2.contains("\"stdout\""),
+        "should not embed raw task JSON in Context: {stage2}"
+    );
+}
+
+#[test]
+fn pipelines_run_empty_step_prompt_omits_pipeline_section_in_stdin() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"only-title","prompt":"","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let stdin_log = temp.path().join("stdin.log");
+    let mock = bin.join("cursor-agent");
+    let body = format!(
+        "#!/bin/sh\ncat > \"{}\"\necho '{{\"text\":\"x\"}}'\n",
+        stdin_log.display()
+    );
+    fs::write(&mock, body).expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["run", "pl", "--prompt", "userhi"]);
+    cmd.assert().success();
+
+    let logged = fs::read_to_string(&stdin_log).expect("stdin");
+    assert!(
+        !logged.contains("## Pipeline prompt"),
+        "empty step prompt should omit pipeline section: {logged}"
+    );
+    assert!(logged.contains("## User prompt"));
 }
 
 #[test]
@@ -313,7 +342,7 @@ fn pipelines_run_does_not_resume_preexisting_run_directory() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     cmd.assert().success();
 
     let logged = fs::read_to_string(&argv_log).expect("argv log");
@@ -363,7 +392,7 @@ fn pipelines_run_ignores_stale_run_artifacts_on_disk() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "new-prompt"]);
+    cmd.args(["run", "pl", "--prompt", "new-prompt"]);
     cmd.assert().success();
 
     let logged = fs::read_to_string(&argv_log).expect("argv log");
@@ -501,7 +530,7 @@ fn pipelines_run_stdout_matches_golden_after_normalization() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "demo-pipe", "--prompt", "userhi"]);
+    cmd.args(["run", "demo-pipe", "--prompt", "userhi"]);
     let out = cmd.assert().success().get_output().stdout.clone();
     let got = normalize_pipeline_run_stdout(&String::from_utf8_lossy(&out));
     assert_eq!(got, PIPELINE_RUN_STDOUT_GOLDEN);

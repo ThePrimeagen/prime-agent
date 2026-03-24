@@ -7,11 +7,13 @@ export type GenerationSnapshotJson = {
 };
 
 export type StepSkillVmJson = {
+  id: string;
   name: string;
   name_encoded: string;
 };
 
 export type SkillVmJson = {
+  id: string;
   name: string;
   name_encoded: string;
   prompt: string;
@@ -20,6 +22,7 @@ export type SkillVmJson = {
 export type PipelineVmJson = {
   name: string;
   name_encoded: string;
+  broken?: boolean;
 };
 
 export type PipelineStepVmJson = {

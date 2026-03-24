@@ -10,6 +10,8 @@ use urlencoding::encode;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillVm {
+    /// Stable skill UUID (matches `skills/<name>/.prime-agent-skill-id`).
+    pub id: String,
     pub name: String,
     pub name_encoded: String,
     pub prompt: String,
@@ -19,10 +21,13 @@ pub struct SkillVm {
 pub struct PipelineVm {
     pub name: String,
     pub name_encoded: String,
+    #[serde(default)]
+    pub broken: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StepSkillVm {
+    pub id: String,
     pub name: String,
     #[allow(dead_code)]
     pub name_encoded: String,
@@ -83,7 +88,7 @@ pub fn render_left_nav_inner(p: &PageInput<'_>) -> String {
     let _ = write!(o, "{}", aria_current(p.active_section, "pipelines"));
     o.push_str("\"\n            style=\"display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;text-decoration:none;color:inherit;\">&#x2554;&#x2557;</a>\n        </div>\n\n        <section id=\"skills-nav-panel\" data-tab-panel=\"skills\"");
     o.push_str(hidden_attr(p.active_section, "skills"));
-    o.push_str(">\n          <h2 style=\"margin-top:0;\">Skills</h2>\n          <button\n            type=\"button\"\n            data-testid=\"skill-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('skill-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"skill-modal\">\n            <form data-ws-form=\"create_skill\">\n              <h3>Create Skill</h3>\n              <label>Name<br><input name=\"name\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('skill-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n");
+    o.push_str(">\n          <h2 style=\"margin-top:0;\">Skills</h2>\n          <button\n            type=\"button\"\n            data-testid=\"skill-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('skill-modal').showModal();\">[ + ]</button>\n\n          <dialog id=\"skill-modal\">\n            <form data-ws-form=\"create_skill\">\n              <h3>Create Skill</h3>\n              <label>Name<br><input name=\"name\" data-lowercase-field=\"skill-name\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('skill-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n");
     if !p.skills.is_empty() {
         o.push_str(
             "          <ul id=\"skills-nav-list\" style=\"padding-left:0;margin-top:1rem;\">\n",
@@ -111,12 +116,24 @@ pub fn render_left_nav_inner(p: &PageInput<'_>) -> String {
         );
         for pl in p.pipelines {
             let sel = p.selected_pipeline.is_some_and(|s| s.name == pl.name);
+            let pipe_style = if pl.broken {
+                "display:block;padding:0.4rem 0.5rem;border:1px solid #fca5a5;border-radius:6px;text-decoration:none;color:#b91c1c;"
+            } else {
+                "display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;"
+            };
+            let label = if pl.broken {
+                format!("{} !", pl.name)
+            } else {
+                pl.name.clone()
+            };
             let _ = write!(
                 o,
-                "            <li style=\"list-style:none;margin-top:0.5rem;\">\n              <a\n                data-testid=\"pipeline-nav-link\"\n                data-selected=\"{}\"\n                href=\"/pipelines/{}\"\n                style=\"display:block;padding:0.4rem 0.5rem;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:inherit;\">{}</a>\n            </li>\n",
+                "            <li style=\"list-style:none;margin-top:0.5rem;\">\n              <a\n                data-testid=\"pipeline-nav-link\"\n                data-broken=\"{}\"\n                data-selected=\"{}\"\n                href=\"/pipelines/{}\"\n                style=\"{}\">{}</a>\n            </li>\n",
+                if pl.broken { "true" } else { "false" },
                 if sel { "true" } else { "false" },
                 pl.name_encoded,
-                esc_html(&pl.name)
+                pipe_style,
+                esc_html(&label)
             );
         }
         o.push_str("          </ul>\n");
@@ -159,8 +176,8 @@ pub fn render_main_inner(p: &PageInput<'_>) -> String {
     if let Some(sk) = p.selected_skill {
         let _ = write!(
             o,
-            "          <article data-skill-editor data-skill-id=\"{}\" style=\"max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;\">\n            <form data-skill-form data-ws-form=\"update_skill\" data-old-name=\"{}\" data-skill-location=\"/skills/{}\">\n              <label>Name<br><input name=\"name\" value=\"{}\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"8\" cols=\"70\" required>{}</textarea></label><br><br>\n              <div style=\"position:absolute;top:0.5rem;right:0.6rem;display:flex;align-items:flex-start;gap:0.35rem;\">\n                <div data-delete-controls style=\"position:relative;\">\n                  <button\n                    type=\"button\"\n                    data-testid=\"delete-skill-trigger\"\n                    aria-label=\"Delete skill\"\n                    aria-haspopup=\"dialog\"\n                    aria-expanded=\"false\"\n                    title=\"Delete skill\"\n                    style=\"border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:0.85rem;line-height:1;padding:0;\">&#128465;</button>\n                  <div\n                    data-testid=\"delete-skill-popover\"\n                    data-delete-popover\n                    hidden\n                    style=\"position:absolute;top:1.1rem;right:0;background:#fff;border:1px solid #d1d5db;border-radius:6px;padding:0.45rem;box-shadow:0 2px 8px rgba(0,0,0,0.12);z-index:10;max-width:260px;\">\n                    <p data-testid=\"delete-skill-warning\" style=\"margin:0 0 0.45rem 0;font-size:0.72rem;line-height:1.35;color:#374151;\">Delete this skill? This is permanent and removes the skill folder and SKILL.md.</p>\n                    <button\n                      type=\"button\"\n                      data-delete-confirm\n                      data-testid=\"delete-skill-confirm\"\n                      style=\"border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;\">Delete permanently</button>\n                  </div>\n                </div>\n              </div>\n            </form>\n            <form data-skill-delete-form data-ws-form=\"delete_skill\" data-skill-name=\"{}\"></form>\n          </article>\n",
-            esc_attr(&sk.name),
+            "          <article data-skill-editor data-skill-id=\"{}\" style=\"max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;\">\n            <form data-skill-form data-ws-form=\"update_skill\" data-old-name=\"{}\" data-skill-location=\"/skills/{}\">\n              <label>Name<br><input name=\"name\" value=\"{}\" data-lowercase-field=\"skill-name\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"8\" cols=\"70\" required>{}</textarea></label><br><br>\n              <div style=\"position:absolute;top:0.5rem;right:0.6rem;display:flex;align-items:flex-start;gap:0.35rem;\">\n                <div data-delete-controls style=\"position:relative;\">\n                  <button\n                    type=\"button\"\n                    data-testid=\"delete-skill-trigger\"\n                    aria-label=\"Delete skill\"\n                    aria-haspopup=\"dialog\"\n                    aria-expanded=\"false\"\n                    title=\"Delete skill\"\n                    style=\"border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:0.85rem;line-height:1;padding:0;\">&#128465;</button>\n                  <div\n                    data-testid=\"delete-skill-popover\"\n                    data-delete-popover\n                    hidden\n                    style=\"position:absolute;top:1.1rem;right:0;background:#fff;border:1px solid #d1d5db;border-radius:6px;padding:0.45rem;box-shadow:0 2px 8px rgba(0,0,0,0.12);z-index:10;max-width:260px;\">\n                    <p data-testid=\"delete-skill-warning\" style=\"margin:0 0 0.45rem 0;font-size:0.72rem;line-height:1.35;color:#374151;\">Delete this skill? This is permanent and removes the skill folder and SKILL.md.</p>\n                    <button\n                      type=\"button\"\n                      data-delete-confirm\n                      data-testid=\"delete-skill-confirm\"\n                      style=\"border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;\">Delete permanently</button>\n                  </div>\n                </div>\n              </div>\n            </form>\n            <form data-skill-delete-form data-ws-form=\"delete_skill\" data-skill-name=\"{}\"></form>\n          </article>\n",
+            esc_attr(&sk.id),
             esc_attr(&sk.name),
             sk.name_encoded,
             esc_attr(&sk.name),
@@ -178,7 +195,7 @@ pub fn render_main_inner(p: &PageInput<'_>) -> String {
     if let Some(pl) = p.selected_pipeline {
         let _ = write!(
             o,
-            "          <article data-testid=\"pipeline-editor\" style=\"max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;\">\n            <form data-ws-form=\"rename_pipeline\" data-old-name=\"{}\" data-pipeline-location=\"/pipelines/{}\">\n              <label>Name<br><input name=\"name\" id=\"pipeline-title\" value=\"{}\" data-lowercase-field=\"pipeline-name\" data-testid=\"pipeline-rename-name\"></label><br><br>\n              <button type=\"submit\" data-testid=\"pipeline-rename-save\">Rename</button>\n            </form>\n          </article>\n          <button\n            type=\"button\"\n            data-testid=\"pipeline-step-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('pipeline-step-modal').showModal();\">Add Step</button>\n\n          <dialog id=\"pipeline-step-modal\">\n            <form data-ws-form=\"create_step\" data-pipeline=\"{}\">\n              <h3>Create Step</h3>\n              <label>Title<br><input name=\"title\" data-lowercase-field=\"pipeline-step-title\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\" required></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('pipeline-step-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n",
+            "          <article data-testid=\"pipeline-editor\" style=\"max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;\">\n            <form data-ws-form=\"rename_pipeline\" data-old-name=\"{}\" data-pipeline-location=\"/pipelines/{}\">\n              <label>Name<br><input name=\"name\" id=\"pipeline-title\" value=\"{}\" data-lowercase-field=\"pipeline-name\" data-testid=\"pipeline-rename-name\"></label><br><br>\n              <button type=\"submit\" data-testid=\"pipeline-rename-save\">Rename</button>\n            </form>\n          </article>\n          <button\n            type=\"button\"\n            data-testid=\"pipeline-step-create-open\"\n            style=\"background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;\"\n            onclick=\"document.getElementById('pipeline-step-modal').showModal();\">Add Step</button>\n\n          <dialog id=\"pipeline-step-modal\">\n            <form data-ws-form=\"create_step\" data-pipeline=\"{}\">\n              <h3>Create Step</h3>\n              <label>Title<br><input name=\"title\" data-lowercase-field=\"pipeline-step-title\" required></label><br><br>\n              <label>Prompt<br><textarea name=\"prompt\" rows=\"6\" cols=\"40\"></textarea></label><br><br>\n              <button type=\"submit\">Save</button>\n              <button type=\"button\" onclick=\"document.getElementById('pipeline-step-modal').close();\">Cancel</button>\n            </form>\n          </dialog>\n\n",
             esc_attr(&pl.name),
             pl.name_encoded,
             esc_attr(&pl.name),
@@ -188,7 +205,7 @@ pub fn render_main_inner(p: &PageInput<'_>) -> String {
             for step in p.pipeline_steps {
                 let _ = write!(
                     o,
-                    "            <article data-testid=\"pipeline-step-editor\" style=\"max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;\">\n              <form data-ws-form=\"update_step\" data-pipeline=\"{}\" data-step-id=\"{}\">\n                <label>Title<br><input name=\"title\" data-lowercase-field=\"pipeline-step-title\" value=\"{}\" required></label><br><br>\n                <label>Description<br><textarea name=\"prompt\" rows=\"6\" cols=\"70\" required>{}</textarea></label><br><br>\n                <button type=\"submit\" data-testid=\"pipeline-step-save\">Save</button>\n              </form>\n              <div style=\"display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;\">\n                <form data-ws-form=\"add_step_skill\" data-pipeline=\"{}\" data-step-id=\"{}\" style=\"display:flex;gap:0.4rem;align-items:center;\">\n                  <select name=\"skill_id\" required>\n                    <option value=\"\">Select skill</option>\n",
+                    "            <article data-testid=\"pipeline-step-editor\" style=\"max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;\">\n              <form data-ws-form=\"update_step\" data-pipeline=\"{}\" data-step-id=\"{}\">\n                <label>Title<br><input name=\"title\" data-lowercase-field=\"pipeline-step-title\" value=\"{}\" required></label><br><br>\n                <label>Description<br><textarea name=\"prompt\" rows=\"6\" cols=\"70\">{}</textarea></label><br><br>\n                <button type=\"submit\" data-testid=\"pipeline-step-save\">Save</button>\n              </form>\n              <div style=\"display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;\">\n                <form data-ws-form=\"add_step_skill\" data-pipeline=\"{}\" data-step-id=\"{}\" style=\"display:flex;gap:0.4rem;align-items:center;\">\n                  <select name=\"skill_id\" required>\n                    <option value=\"\">Select skill</option>\n",
                     esc_attr(&pl.name),
                     step.id,
                     esc_html(&step.title),
@@ -200,7 +217,7 @@ pub fn render_main_inner(p: &PageInput<'_>) -> String {
                     let _ = write!(
                         o,
                         "                    <option value=\"{}\">{}</option>\n",
-                        esc_attr(&sk.name),
+                        esc_attr(&sk.id),
                         esc_html(&sk.name)
                     );
                 }
@@ -217,11 +234,11 @@ pub fn render_main_inner(p: &PageInput<'_>) -> String {
                     for att in &step.skills {
                         let _ = write!(
                             o,
-                            "                <li style=\"margin-top:0.3rem;\">\n                  <span data-testid=\"pipeline-step-attached-skill\">{}</span>\n                  <form data-ws-form=\"delete_step_skill\" data-pipeline=\"{}\" data-step-id=\"{}\" data-skill-name=\"{}\" style=\"display:inline;\">\n                    <button type=\"submit\" style=\"margin-left:0.4rem;border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;\">Remove</button>\n                  </form>\n                </li>\n",
+                            "                <li style=\"margin-top:0.3rem;\">\n                  <span data-testid=\"pipeline-step-attached-skill\">{}</span>\n                  <form data-ws-form=\"delete_step_skill\" data-pipeline=\"{}\" data-step-id=\"{}\" data-skill-id=\"{}\" style=\"display:inline;\">\n                    <button type=\"submit\" style=\"margin-left:0.4rem;border:1px solid #ef4444;background:#fff;color:#b91c1c;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.72rem;cursor:pointer;\">Remove</button>\n                  </form>\n                </li>\n",
                             esc_html(&att.name),
                             esc_attr(&pl.name),
                             step.id,
-                            esc_attr(&att.name)
+                            esc_attr(&att.id)
                         );
                     }
                     o.push_str("              </ul>\n");
@@ -265,18 +282,20 @@ pub fn render_page(p: &PageInput<'_>) -> String {
     o
 }
 
-pub fn skill_vm(name: &str, prompt: &str) -> SkillVm {
+pub fn skill_vm(name: &str, prompt: &str, id: &str) -> SkillVm {
     SkillVm {
+        id: id.to_string(),
         name: name.to_string(),
         name_encoded: enc(name),
         prompt: prompt.to_string(),
     }
 }
 
-pub fn pipeline_vm(name: &str) -> PipelineVm {
+pub fn pipeline_vm(name: &str, broken: bool) -> PipelineVm {
     PipelineVm {
         name: name.to_string(),
         name_encoded: enc(name),
+        broken,
     }
 }
 
@@ -298,15 +317,24 @@ pub fn step_vm(
     }
 }
 
-pub fn step_skill_vm(name: &str) -> StepSkillVm {
+pub fn step_skill_vm(s: &crate::pipeline_store::StepSkillView) -> StepSkillVm {
+    let display = s.resolved_name.as_deref().unwrap_or(&s.alias);
     StepSkillVm {
-        name: name.to_string(),
-        name_encoded: enc(name),
+        id: s.id.to_string(),
+        name: display.to_string(),
+        name_encoded: enc(display),
     }
 }
 
 pub fn join_skill_names(skills: &[crate::pipeline_store::StepSkillView]) -> String {
-    let mut names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+    let mut names: Vec<String> = skills
+        .iter()
+        .map(|s| {
+            s.resolved_name
+                .clone()
+                .unwrap_or_else(|| s.alias.clone())
+        })
+        .collect();
     names.sort_unstable();
     names.join(", ")
 }

@@ -2,14 +2,16 @@ mod common;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use common::{
-    chmod_x, pipeline_artifact_dir_for, pipelines_cmd, stdout_after_version_line,
-    write_dot_prime_agent_config, write_dot_prime_agent_config_yolo, write_pipeline,
+    chmod_x, lone_pipeline_run_dir, pipeline_artifact_dir_for, pipelines_cmd,
+    stdout_after_version_line, write_dot_prime_agent_config, write_dot_prime_agent_config_yolo,
+    write_pipeline, write_skill_with_id,
 };
 use predicates::str::contains;
 use predicates::str::contains as contains_text;
 use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 #[test]
 fn pipelines_default_no_subcommand_lists_two_sorted() {
@@ -31,7 +33,6 @@ fn pipelines_default_no_subcommand_lists_two_sorted() {
     fs::create_dir_all(&bin).expect("bin");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.arg("pipelines");
     let out = cmd.assert().success().get_output().stdout.clone();
     assert_eq!(stdout_after_version_line(&out), "alpha\n\nbeta\n");
 }
@@ -51,7 +52,6 @@ fn pipelines_default_no_subcommand_lists_one() {
     fs::create_dir_all(&bin).expect("bin");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.arg("pipelines");
     let out = cmd.assert().success().get_output().stdout.clone();
     assert_eq!(stdout_after_version_line(&out), "solo\n");
 }
@@ -67,7 +67,6 @@ fn pipelines_default_no_subcommand_empty_stderr() {
     fs::create_dir_all(&bin).expect("bin");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.arg("pipelines");
     let out = cmd.assert().success().get_output().clone();
     assert_eq!(stdout_after_version_line(&out.stdout), "");
     let err = String::from_utf8_lossy(&out.stderr);
@@ -90,7 +89,6 @@ fn pipelines_default_no_subcommand_ignores_incomplete_dir() {
     fs::create_dir_all(&bin).expect("bin");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.arg("pipelines");
     let out = cmd.assert().success().get_output().stdout.clone();
     assert_eq!(stdout_after_version_line(&out), "good\n");
 }
@@ -110,7 +108,6 @@ fn pipelines_default_no_subcommand_respects_data_dir_flag() {
     fs::create_dir_all(&bin).expect("bin");
 
     let mut cmd = pipelines_cmd(&temp, &right, &skills_dir, &bin);
-    cmd.arg("pipelines");
     let out = cmd.assert().success().get_output().stdout.clone();
     assert_eq!(stdout_after_version_line(&out), "only\n");
 }
@@ -125,7 +122,7 @@ fn pipelines_help_mentions_default_behavior() {
     fs::create_dir_all(&bin).expect("bin");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "--help"]);
+    cmd.args(["--help"]);
     cmd.assert()
         .success()
         .stdout(contains_text("run"))
@@ -151,7 +148,7 @@ fn pipelines_run_errors_when_neither_prompt_nor_file() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl"]);
+    cmd.args(["run", "pl"]);
     cmd.assert().failure();
 }
 
@@ -176,7 +173,7 @@ fn pipelines_run_errors_when_both_prompt_and_file() {
     fs::write(&f, "hi").expect("f");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "a", "--file"])
+    cmd.args(["run", "pl", "--prompt", "a", "--file"])
         .arg(&f);
     cmd.assert().failure();
 }
@@ -199,8 +196,59 @@ fn pipelines_run_errors_when_dot_prime_agent_config_missing() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "x"]);
+    cmd.args(["run", "pl", "--prompt", "x"]);
     cmd.assert().failure();
+}
+
+#[test]
+fn pipelines_run_uses_global_config_json_data_dir_without_cli_data_dir() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("from-global");
+    let skills_dir = data_dir.join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+
+    let config_home = temp.path().join("config");
+    fs::create_dir_all(config_home.join("prime-agent")).expect("cfg");
+    let global_cfg = config_home.join("prime-agent/config.json");
+    let cfg = json!({
+        "model": "m",
+        "clirunner": "cursor-agent",
+        "data-dir": data_dir.to_string_lossy(),
+    });
+    fs::write(
+        &global_cfg,
+        format!("{}\n", serde_json::to_string_pretty(&cfg).unwrap()),
+    )
+    .expect("write global");
+
+    write_pipeline(
+        &data_dir,
+        "pl",
+        r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(
+        &mock,
+        "#!/bin/sh\ncat >/dev/null\necho '{\"text\":\"x\"}'\n",
+    )
+    .expect("mock");
+    chmod_x(&mock);
+
+    let path_var = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut cmd = cargo_bin_cmd!("prime-agent");
+    cmd.current_dir(temp.path())
+        .env("PATH", &path_var)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("PRIME_AGENT_NO_TUI", "1")
+        .args(["run", "pl", "--prompt", "x"]);
+    cmd.assert().success();
 }
 
 #[test]
@@ -222,7 +270,7 @@ fn pipelines_run_errors_on_unsupported_clirunner() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "x"]);
+    cmd.args(["run", "pl", "--prompt", "x"]);
     cmd.assert()
         .failure()
         .stderr(contains("unsupported clirunner"));
@@ -253,7 +301,6 @@ fn pipelines_run_debug_echoes_subprocess_streams_to_stderr() {
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
     cmd.args([
         "--debug",
-        "pipelines",
         "run",
         "dbg-pipe",
         "--prompt",
@@ -279,16 +326,15 @@ fn pipelines_run_debug_shows_task_position_for_multi_skill_step() {
     let temp = TempDir::new().expect("temp");
     let data_dir = temp.path().join("data");
     let skills_dir = temp.path().join("skills");
-    fs::create_dir_all(skills_dir.join("skill-a")).expect("skill-a");
-    fs::create_dir_all(skills_dir.join("skill-b")).expect("skill-b");
-    fs::write(skills_dir.join("skill-a/SKILL.md"), "a\n").expect("skill-a md");
-    fs::write(skills_dir.join("skill-b/SKILL.md"), "b\n").expect("skill-b md");
+    let id_a = Uuid::parse_str("00000000-0000-4000-8000-0000000000a1").expect("uuid a");
+    let id_b = Uuid::parse_str("00000000-0000-4000-8000-0000000000b2").expect("uuid b");
+    write_skill_with_id(&skills_dir, "skill-a", &id_a, "a\n");
+    write_skill_with_id(&skills_dir, "skill-b", &id_b, "b\n");
     write_dot_prime_agent_config(&temp, "m", "cursor-agent");
-    write_pipeline(
-        &data_dir,
-        "dbg-multi",
-        r#"{"steps":[{"id":1,"title":"DualStep","prompt":"p","skills":["skill-b","skill-a"]}]}"#,
+    let pipe = format!(
+        r#"{{"steps":[{{"id":1,"title":"DualStep","prompt":"p","skills":[{{"id":"{id_a}","alias":"skill-a"}},{{"id":"{id_b}","alias":"skill-b"}}]}}]}}"#
     );
+    write_pipeline(&data_dir, "dbg-multi", &pipe);
     let bin = temp.path().join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let mock = bin.join("cursor-agent");
@@ -302,7 +348,6 @@ fn pipelines_run_debug_shows_task_position_for_multi_skill_step() {
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
     cmd.args([
         "--debug",
-        "pipelines",
         "run",
         "dbg-multi",
         "--prompt",
@@ -344,7 +389,7 @@ fn pipelines_shorthand_pipeline_and_prompt_matches_run_output() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "--pipeline", "demo-pipe", "--prompt", "userhi"]);
+    cmd.args(["--pipeline", "demo-pipe", "--prompt", "userhi"]);
     cmd.assert().success();
 
     let one = pipeline_artifact_dir_for(temp.path(), "demo-pipe").join("1_1.json");
@@ -380,7 +425,7 @@ fn pipelines_shorthand_pipeline_and_file_matches_run_output() {
     fs::write(&pf, "userhi").expect("pf");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "--pipeline", "demo-pipe", "--file"])
+    cmd.args(["--pipeline", "demo-pipe", "--file"])
         .arg(&pf);
     cmd.assert().success();
 
@@ -418,7 +463,6 @@ fn pipelines_shorthand_file_flag_before_pipeline_flag_matches_run_output() {
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
     cmd.args([
-        "pipelines",
         "--file",
         pf.to_str().expect("utf8"),
         "--pipeline",
@@ -459,7 +503,7 @@ fn pipelines_shorthand_pipeline_and_file_reads_file_into_agent_stdin() {
     fs::write(&pf, "unique-file-content-shorthand-abc").expect("pf");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "--pipeline", "pl", "--file"])
+    cmd.args(["--pipeline", "pl", "--file"])
         .arg(&pf);
     cmd.assert().success();
 
@@ -507,7 +551,6 @@ fn pipelines_shorthand_pipeline_and_file_with_data_dir_cli_flag_only() {
             data_dir.to_str().expect("utf8"),
             "--skills-dir",
             skills_dir.to_str().expect("utf8"),
-            "pipelines",
             "--pipeline",
             "prime-executor",
             "--file",
@@ -546,7 +589,7 @@ fn pipelines_shorthand_relative_title_file_in_cwd() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "--pipeline", "demo-pipe", "--file", "title"]);
+    cmd.args(["--pipeline", "demo-pipe", "--file", "title"]);
     cmd.assert().success();
 
     let one = pipeline_artifact_dir_for(temp.path(), "demo-pipe").join("1_1.json");
@@ -572,7 +615,7 @@ fn pipelines_shorthand_pipeline_without_prompt_or_file_errors() {
     fs::create_dir_all(&bin).expect("bin");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "--pipeline", "pl"]);
+    cmd.args(["--pipeline", "pl"]);
     cmd.assert().failure().stderr(contains(
         "with --pipeline, provide exactly one of --prompt or --file",
     ));
@@ -597,7 +640,6 @@ fn pipelines_shorthand_pipeline_both_prompt_and_file_errors() {
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
     cmd.args([
-        "pipelines",
         "--pipeline",
         "pl",
         "--prompt",
@@ -632,7 +674,7 @@ fn pipelines_file_without_pipeline_non_tty_lists_does_not_run() {
     fs::write(&pf, "should-not-run-pipeline").expect("pf");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "--file"]).arg(&pf);
+    cmd.args(["--file"]).arg(&pf);
     let out = cmd.assert().success().get_output().stdout.clone();
     assert_eq!(
         stdout_after_version_line(&out),
@@ -669,7 +711,6 @@ fn pipelines_run_rejects_combined_pipeline_flag() {
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
     cmd.args([
-        "pipelines",
         "--pipeline",
         "pl",
         "run",
@@ -679,7 +720,7 @@ fn pipelines_run_rejects_combined_pipeline_flag() {
     ]);
     cmd.assert()
         .failure()
-        .stderr(contains("do not combine `pipelines run` with --pipeline"));
+        .stderr(contains("do not combine `run` with --pipeline"));
 }
 
 #[test]
@@ -705,7 +746,7 @@ fn pipelines_run_prints_kebab_run_name_first_line() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     let out = cmd.assert().success().get_output().stdout.clone();
     let text = String::from_utf8_lossy(&out);
     let first = text
@@ -751,7 +792,7 @@ fn pipelines_run_passes_model_and_force_to_subprocess() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     cmd.assert().success();
 
     let logged = fs::read_to_string(&argv_log).expect("log");
@@ -786,7 +827,7 @@ fn pipelines_run_omits_force_when_yolo_false() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     cmd.assert().success();
 
     let logged = fs::read_to_string(&argv_log).expect("log");
@@ -823,7 +864,7 @@ fn pipelines_run_includes_force_when_yolo_key_omitted() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     cmd.assert().success();
 
     let logged = fs::read_to_string(&argv_log).expect("log");
@@ -856,7 +897,7 @@ fn pipelines_run_reads_prompt_from_file() {
     fs::write(&pf, "unique-file-content-xyz").expect("pf");
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--file"]).arg(&pf);
+    cmd.args(["run", "pl", "--file"]).arg(&pf);
     cmd.assert().success();
 
     let s = fs::read_to_string(&stdin_log).expect("stdin");
@@ -872,7 +913,7 @@ fn pipelines_run_stage_json_includes_stdout_stderr_and_error_on_failure() {
     write_dot_prime_agent_config(&temp, "m", "cursor-agent");
     write_pipeline(
         &data_dir,
-        "pl",
+        "stage-json-fail",
         r#"{"steps":[{"id":1,"title":"a","prompt":"p","skills":[]}]}"#,
     );
     let bin = temp.path().join("bin");
@@ -882,16 +923,19 @@ fn pipelines_run_stage_json_includes_stdout_stderr_and_error_on_failure() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "stage-json-fail", "--prompt", "u"]);
     cmd.assert().failure();
 
-    let raw = fs::read_to_string(pipeline_artifact_dir_for(temp.path(), "pl").join("1_1.json"))
+    let raw = fs::read_to_string(lone_pipeline_run_dir(temp.path()).join("1_1.json"))
         .expect("1_1.json");
     let v: serde_json::Value = serde_json::from_str(&raw).expect("parse");
     assert!(v.get("error").is_some());
-    assert_eq!(v["code"], 7);
     assert!(v["stdout"].as_str().is_some());
-    assert!(v["stderr"].as_str().is_some());
+    assert!(
+        v["stderr"].as_str().is_some_and(|s| s.contains("boom")),
+        "unexpected task json stderr; raw={raw:?}"
+    );
+    assert_eq!(v["code"].as_i64(), Some(7));
 }
 
 #[test]
@@ -913,7 +957,7 @@ fn pipelines_run_stage1_failure_does_not_write_stage2_task_json() {
     chmod_x(&mock);
 
     let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
-    cmd.args(["pipelines", "run", "pl", "--prompt", "u"]);
+    cmd.args(["run", "pl", "--prompt", "u"]);
     cmd.assert().failure();
 
     let d = pipeline_artifact_dir_for(temp.path(), "pl");
@@ -925,4 +969,136 @@ fn pipelines_run_stage1_failure_does_not_write_stage2_task_json() {
         !d.join("2_1.json").exists(),
         "stage 2 must not run after stage 1 failure"
     );
+}
+
+#[test]
+fn skill_rename_updates_alias_in_two_pipelines_after_list() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    let sid = Uuid::parse_str("00000000-0000-4000-8000-00000000ab12").expect("uuid");
+    write_skill_with_id(&skills_dir, "skill-a", &sid, "x\n");
+    let step = format!(
+        r#"{{"id":1,"title":"s","prompt":"p","skills":[{{"id":"{sid}","alias":"skill-a"}}]}}"#
+    );
+    write_pipeline(
+        &data_dir,
+        "pipe-a",
+        &format!(r#"{{"steps":[{step}]}}"#),
+    );
+    write_pipeline(
+        &data_dir,
+        "pipe-b",
+        &format!(r#"{{"steps":[{step}]}}"#),
+    );
+    fs::rename(skills_dir.join("skill-a"), skills_dir.join("zed")).expect("rename skill");
+
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.assert().success();
+
+    for pl in ["pipe-a", "pipe-b"] {
+        let raw = fs::read_to_string(
+            data_dir
+                .join("pipelines")
+                .join(pl)
+                .join("pipeline.json"),
+        )
+        .expect("read pipeline");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+        assert_eq!(
+            v["steps"][0]["skills"][0]["alias"].as_str(),
+            Some("zed"),
+            "pipeline {pl} should rewrite alias after skill dir rename"
+        );
+    }
+}
+
+#[test]
+fn pipelines_run_reports_broken_pipeline_with_step_and_alias() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    let missing = Uuid::nil();
+    write_pipeline(
+        &data_dir,
+        "broken-pipe",
+        &format!(
+            r#"{{"steps":[{{"id":7,"title":"bad-step","prompt":"p","skills":[{{"id":"{missing}","alias":"gone-skill"}}]}}]}}"#
+        ),
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(&mock, "#!/bin/sh\necho x\n").expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["run", "broken-pipe", "--prompt", "u"]);
+    let out = cmd.output().expect("run");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("broken-pipe"), "{err}");
+    assert!(err.contains("bad-step") || err.contains('7'), "{err}");
+    assert!(err.contains("gone-skill"), "{err}");
+    assert!(err.contains(&missing.to_string()), "{err}");
+}
+
+#[test]
+fn pipelines_default_non_tty_marks_broken_pipeline() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    let missing = Uuid::nil();
+    write_pipeline(
+        &data_dir,
+        "broken-pipe",
+        &format!(
+            r#"{{"steps":[{{"id":1,"title":"s","prompt":"p","skills":[{{"id":"{missing}","alias":"orphan"}}]}}]}}"#
+        ),
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    let out = cmd.assert().success().get_output().stdout.clone();
+    let text = stdout_after_version_line(&out);
+    assert!(
+        text.contains("broken-pipe !"),
+        "expected broken suffix in list, got {text:?}"
+    );
+}
+
+#[test]
+fn pipelines_duplicate_skill_ids_on_disk_fail_run() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    let sid = Uuid::parse_str("00000000-0000-4000-8000-00000000d001").expect("uuid");
+    write_skill_with_id(&skills_dir, "dup-a", &sid, "a\n");
+    write_skill_with_id(&skills_dir, "dup-b", &sid, "b\n");
+    write_dot_prime_agent_config(&temp, "m", "cursor-agent");
+    write_pipeline(
+        &data_dir,
+        "pl",
+        &format!(
+            r#"{{"steps":[{{"id":1,"title":"t","prompt":"p","skills":[{{"id":"{sid}","alias":"dup-a"}}]}}]}}"#
+        ),
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(&mock, "#!/bin/sh\necho x\n").expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["run", "pl", "--prompt", "u"]);
+    let out = cmd.output().expect("run");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("duplicate skill id"), "{err}");
 }

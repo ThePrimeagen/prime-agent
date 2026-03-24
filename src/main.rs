@@ -2,7 +2,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 
 use anyhow::{Context, Result, anyhow};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use std::collections::HashMap;
 use std::env;
 use std::io::{BufRead, IsTerminal, Write, stdin, stdout};
@@ -26,8 +26,7 @@ mod skills_store;
 mod sync;
 mod web;
 
-use crate::agents_md::AgentSection;
-use crate::cli::{Cli, Command, ConfigAction, PipelinesAction};
+use crate::cli::{Cli, ConfigAction, RootCommand};
 use crate::config::Config;
 use crate::pipeline_run::PipelineRunOptions;
 use crate::pipeline_store::PipelineStore;
@@ -36,108 +35,96 @@ use crate::skills_store::SkillsStore;
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let version = env!("CARGO_PKG_VERSION");
+
+    if let Some(RootCommand::Help) = &cli.command {
+        Cli::command().print_long_help()?;
+        return Ok(());
+    }
+    if let Some(RootCommand::Version) = &cli.command {
+        println!("{version}");
+        return Ok(());
+    }
+
     println!("\u{001b}[32mprime-agent({version})\u{001b}[0m");
 
     let overrides = parse_config_overrides(&cli.config_overrides)?;
 
-    if let Command::Config { action } = &cli.command {
+    if let Some(RootCommand::Config { action }) = &cli.command {
         handle_config_command(action.as_ref())?;
         return Ok(());
     }
 
-    if let Command::Clear = &cli.command {
+    if let Some(RootCommand::Clear) = &cli.command {
         let cwd = std::env::current_dir().context("current_dir for clear")?;
         crate::pipeline_run::clear_pipeline_runs(&cwd)?;
         return Ok(());
     }
 
-    if let Command::Serve { bind } = &cli.command {
-        let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+    if let Some(RootCommand::Serve { bind }) = &cli.command {
+        let cwd = std::env::current_dir().context("current_dir for serve")?;
+        let local_cfg = cwd.join(".prime-agent").join("config.json");
+        let merged_dd =
+            crate::dot_prime_agent_config::merged_data_dir_for_serve(&local_cfg)?;
+        let data_dir = crate::data_dir::resolve_data_dir(
+            cli.data_dir.as_deref(),
+            merged_dd.as_deref(),
+        )?;
         let bind = bind.clone().unwrap_or_else(|| "127.0.0.1:8080".to_string());
         serve::run_blocking(data_dir, bind)?;
         return Ok(());
     }
 
-    if let Command::Pipelines {
-        pipeline,
-        prompt,
-        file,
-        no_tui,
-        action,
-    } = &cli.command
+    if let Some(
+        RootCommand::Run {
+            name,
+            prompt,
+            file,
+            no_tui: _,
+        },
+    ) = &cli.command
     {
         run_pipelines_command(
             &cli,
             &overrides,
-            pipeline.as_deref(),
-            prompt.as_deref(),
-            file.as_ref(),
-            *no_tui,
-            action.as_ref(),
+            Some(&ExplicitRun {
+                name: name.as_str(),
+                prompt: prompt.as_deref(),
+                file: file.as_ref(),
+            }),
         )?;
         return Ok(());
     }
 
-    let skills_dir = resolve_skills_dir(&cli, &overrides)?;
+    if cli.command.is_none() {
+        run_pipelines_command(&cli, &overrides, None)?;
+        return Ok(());
+    }
+
+    let cwd = std::env::current_dir().context("current_dir for skills")?;
+    let local_cfg = cwd.join(".prime-agent").join("config.json");
+    let merged_dd = crate::dot_prime_agent_config::merged_data_dir_for_serve(&local_cfg)?;
+    let skills_dir = resolve_skills_dir(&cli, &overrides, merged_dd.as_deref())?;
     let agents_path = cli
         .agents_path
+        .clone()
         .unwrap_or_else(|| PathBuf::from("AGENTS.md"));
     let skills_store = SkillsStore::new(skills_dir);
 
-    match cli.command {
-        Command::Get { skills } => {
-            let skill_names = cli::expand_skill_args(skills)?;
-            let mut sections = Vec::with_capacity(skill_names.len());
-            for name in skill_names {
-                SkillsStore::validate_name(&name)?;
-                let content = skills_store.load_skill(&name)?;
-                sections.push(AgentSection::from_content(name, &content));
-            }
-            let rendered = agents_md::render_sections(&sections);
-            std::fs::write(&agents_path, rendered)?;
-        }
-        Command::Set { name, path } => {
-            SkillsStore::validate_write_name(&name)?;
-            let content = std::fs::read_to_string(&path)?;
-            skills_store.save_skill(&name, &content)?;
-        }
-        Command::Sync => run_sync_cmd(&skills_store, &agents_path)?,
-        Command::SyncRemote => run_sync_remote_cmd(&skills_store, &agents_path)?,
-        Command::List { fragment } => run_list_cmd(&skills_store, fragment)?,
-        Command::Local => run_local_cmd(&skills_store, &agents_path)?,
-        Command::Config { .. } => {
-            unreachable!("config command handled before skills setup");
-        }
-        Command::Serve { .. } => {
-            unreachable!("serve command handled before skills setup");
-        }
-        Command::Pipelines { .. } => {
-            unreachable!("pipelines command handled before skills setup");
-        }
-        Command::Clear => {
-            unreachable!("clear command handled before skills setup");
-        }
-        Command::Delete { name } => {
-            SkillsStore::validate_name(&name)?;
-            let contents = std::fs::read_to_string(&agents_path)
-                .with_context(|| format!("failed to read '{}'", agents_path.display()))?;
-            let mut doc = agents_md::AgentsDoc::parse(&contents)?;
-            if doc.remove_section(&name) {
-                std::fs::write(&agents_path, doc.render())
-                    .with_context(|| format!("failed to write '{}'", agents_path.display()))?;
-            }
-        }
-        Command::DeleteGlobally { name } => {
-            SkillsStore::validate_name(&name)?;
-            let contents = std::fs::read_to_string(&agents_path)
-                .with_context(|| format!("failed to read '{}'", agents_path.display()))?;
-            let mut doc = agents_md::AgentsDoc::parse(&contents)?;
-            if doc.remove_section(&name) {
-                std::fs::write(&agents_path, doc.render())
-                    .with_context(|| format!("failed to write '{}'", agents_path.display()))?;
-            }
-            skills_store.delete_skill(&name)?;
-        }
+    run_skills_commands(&cli, &skills_store, &agents_path)?;
+    Ok(())
+}
+
+struct ExplicitRun<'a> {
+    name: &'a str,
+    prompt: Option<&'a str>,
+    file: Option<&'a PathBuf>,
+}
+
+fn run_skills_commands(cli: &Cli, skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
+    match &cli.command {
+        Some(RootCommand::List { fragment }) => run_list_cmd(skills_store, fragment.clone())?,
+        Some(RootCommand::Local) => run_local_cmd(skills_store, agents_path)?,
+        _ => unreachable!("only list and local reach here"),
     }
     Ok(())
 }
@@ -145,38 +132,34 @@ fn main() -> Result<()> {
 fn run_pipelines_command(
     cli: &Cli,
     overrides: &HashMap<String, String>,
-    pipeline_flag: Option<&str>,
-    prompt_flag: Option<&str>,
-    file_flag: Option<&PathBuf>,
-    _no_tui_flag: bool,
-    action: Option<&PipelinesAction>,
+    explicit_run: Option<&ExplicitRun<'_>>,
 ) -> Result<()> {
-    match action {
-        Some(PipelinesAction::Run {
-            name,
-            prompt,
-            file,
-            no_tui: _,
-        }) => {
+    let pipeline_flag = cli.pipeline.pipeline.as_deref();
+    let prompt_flag = cli.pipeline.prompt.as_deref();
+    let file_flag = cli.pipeline.file.as_ref();
+
+    match explicit_run {
+        Some(run) => {
             if pipeline_flag.is_some() {
                 return Err(anyhow!(
-                    "do not combine `pipelines run` with --pipeline; use `pipelines run <name>` or `pipelines --pipeline <name>` without the run subcommand"
+                    "do not combine `run` with --pipeline; use `run <name>` or `--pipeline <name>` without the run subcommand"
                 ));
             }
-            let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
-            let skills_dir = resolve_skills_dir(cli, overrides)?;
-            let dot_path = std::env::current_dir()
-                .context("current_dir for .prime-agent/config.json")?
-                .join(".prime-agent")
-                .join("config.json");
-            let dot = crate::dot_prime_agent_config::load(&dot_path)?;
-            let user_text = match (prompt.as_ref(), file.as_ref()) {
-                (Some(p), None) => p.clone(),
+            let cwd = std::env::current_dir().context("current_dir for .prime-agent/config.json")?;
+            let dot_path = cwd.join(".prime-agent").join("config.json");
+            let dot = crate::dot_prime_agent_config::load_merged(&dot_path)?;
+            let data_dir = crate::data_dir::resolve_data_dir(
+                cli.data_dir.as_deref(),
+                dot.data_dir.as_deref(),
+            )?;
+            let skills_dir = resolve_skills_dir(cli, overrides, dot.data_dir.as_deref())?;
+            let user_text = match (run.prompt, run.file) {
+                (Some(p), None) => p.to_string(),
                 (None, Some(f)) => std::fs::read_to_string(f)
                     .with_context(|| format!("read user prompt file '{}'", f.display()))?,
                 (None, None) => {
                     return Err(anyhow!(
-                        "provide exactly one of --prompt or --file for pipelines run"
+                        "provide exactly one of --prompt or --file for `prime-agent run`"
                     ));
                 }
                 (Some(_), Some(_)) => {
@@ -184,10 +167,9 @@ fn run_pipelines_command(
                 }
             };
             let skills_store = SkillsStore::new(skills_dir);
-            let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
             let options = PipelineRunOptions { debug: cli.debug };
             crate::pipeline_run::run(
-                name,
+                run.name,
                 &user_text,
                 &data_dir,
                 &skills_store,
@@ -199,13 +181,15 @@ fn run_pipelines_command(
         }
         None => {
             if let Some(pname) = pipeline_flag {
-                let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
-                let skills_dir = resolve_skills_dir(cli, overrides)?;
-                let dot_path = std::env::current_dir()
-                    .context("current_dir for .prime-agent/config.json")?
-                    .join(".prime-agent")
-                    .join("config.json");
-                let dot = crate::dot_prime_agent_config::load(&dot_path)?;
+                let cwd = std::env::current_dir()
+                    .context("current_dir for .prime-agent/config.json")?;
+                let dot_path = cwd.join(".prime-agent").join("config.json");
+                let dot = crate::dot_prime_agent_config::load_merged(&dot_path)?;
+                let data_dir = crate::data_dir::resolve_data_dir(
+                    cli.data_dir.as_deref(),
+                    dot.data_dir.as_deref(),
+                )?;
+                let skills_dir = resolve_skills_dir(cli, overrides, dot.data_dir.as_deref())?;
                 let user_text = match (prompt_flag, file_flag) {
                     (Some(p), None) => p.to_string(),
                     (None, Some(f)) => std::fs::read_to_string(f)
@@ -220,7 +204,6 @@ fn run_pipelines_command(
                     }
                 };
                 let skills_store = SkillsStore::new(skills_dir);
-                let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
                 let options = PipelineRunOptions { debug: cli.debug };
                 crate::pipeline_run::run(
                     pname,
@@ -240,31 +223,28 @@ fn run_pipelines_command(
 }
 
 fn run_pipelines_default(cli: &Cli, overrides: &HashMap<String, String>) -> Result<()> {
-    let Command::Pipelines { .. } = &cli.command else {
-        unreachable!("run_pipelines_default only for pipelines command");
-    };
-    let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+    let cwd = std::env::current_dir().context("current_dir for .prime-agent/config.json")?;
+    let local_cfg = cwd.join(".prime-agent").join("config.json");
+    let merged_dd = crate::dot_prime_agent_config::merged_data_dir_for_serve(&local_cfg)?;
+    let data_dir = crate::data_dir::resolve_data_dir(
+        cli.data_dir.as_deref(),
+        merged_dd.as_deref(),
+    )?;
     let store = PipelineStore::new(&data_dir);
-    let names = store.list_pipeline_names()?;
-    if names.is_empty() {
+    let skills_dir = resolve_skills_dir(cli, overrides, merged_dd.as_deref())?;
+    let skills_store = SkillsStore::new(skills_dir);
+    let entries = store.list_pipelines_with_health(&skills_store)?;
+    if entries.is_empty() {
         eprintln!("No pipelines found.");
         return Ok(());
     }
     if !stdout().is_terminal() {
-        print_pipeline_names(&names);
+        print_pipeline_names(&entries);
         return Ok(());
     }
 
-    let pipeline_name = pipeline_pick::pick_pipeline_interactive(&names)?;
-
-    let dot_path = std::env::current_dir()
-        .context("current_dir for .prime-agent/config.json")?
-        .join(".prime-agent")
-        .join("config.json");
-    let dot = crate::dot_prime_agent_config::load(&dot_path)?;
-    let skills_dir = resolve_skills_dir(cli, overrides)?;
-    let skills_store = SkillsStore::new(skills_dir);
-    let cwd = std::env::current_dir().context("current_dir for pipeline output")?;
+    let pipeline_name = pipeline_pick::pick_pipeline_interactive(&entries)?;
+    let dot = crate::dot_prime_agent_config::load_merged(&local_cfg)?;
     let user_text = read_user_prompt_line()?;
     let options = PipelineRunOptions { debug: cli.debug };
     crate::pipeline_run::run(
@@ -278,14 +258,18 @@ fn run_pipelines_default(cli: &Cli, overrides: &HashMap<String, String>) -> Resu
     )
 }
 
-fn print_pipeline_names(names: &[String]) {
+fn print_pipeline_names(entries: &[(String, bool)]) {
     let mut first = true;
-    for name in names {
+    for (name, broken) in entries {
         if !first {
             println!();
         }
         first = false;
-        println!("{name}");
+        if *broken {
+            println!("{name} !");
+        } else {
+            println!("{name}");
+        }
     }
 }
 
@@ -298,14 +282,6 @@ fn read_user_prompt_line() -> Result<String> {
         .read_line(&mut line)
         .context("read user prompt from stdin")?;
     Ok(line.trim_end().to_string())
-}
-
-fn run_sync_cmd(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
-    sync::run_sync(skills_store, agents_path)
-}
-
-fn run_sync_remote_cmd(skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
-    sync::run_sync_remote(skills_store, agents_path)
 }
 
 fn run_list_cmd(skills_store: &SkillsStore, fragment: Option<String>) -> Result<()> {
@@ -388,14 +364,18 @@ fn handle_config_command(action: Option<&ConfigAction>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_skills_dir(cli: &Cli, overrides: &HashMap<String, String>) -> Result<PathBuf> {
+fn resolve_skills_dir(
+    cli: &Cli,
+    overrides: &HashMap<String, String>,
+    config_data_dir: Option<&Path>,
+) -> Result<PathBuf> {
     if let Some(path) = overrides.get("skills-dir").map(PathBuf::from) {
         return Ok(path);
     }
     if let Some(path) = cli.skills_dir.clone() {
         return Ok(expand_path(&path));
     }
-    let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref())?;
+    let data_dir = crate::data_dir::resolve_data_dir(cli.data_dir.as_deref(), config_data_dir)?;
     Ok(data_dir.join("skills"))
 }
 

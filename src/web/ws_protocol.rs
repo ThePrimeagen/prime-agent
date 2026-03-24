@@ -66,7 +66,7 @@ pub enum ClientOp {
         id: String,
         pipeline: String,
         step_id: i64,
-        skill_name: String,
+        skill_id: String,
     },
 }
 

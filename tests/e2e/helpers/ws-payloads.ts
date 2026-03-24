@@ -20,4 +20,4 @@ export type WsClientPayload =
       target_step_id: number | string;
     }
   | { op: "add_step_skill"; id: string; pipeline: string; step_id: number; skill_id: string }
-  | { op: "delete_step_skill"; id: string; pipeline: string; step_id: number; skill_name: string };
+  | { op: "delete_step_skill"; id: string; pipeline: string; step_id: number; skill_id: string };
