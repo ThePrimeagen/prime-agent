@@ -75,14 +75,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Some(
-        RootCommand::Run {
-            name,
-            prompt,
-            file,
-            no_tui: _,
-        },
-    ) = &cli.command
+    if let Some(RootCommand::Run {
+        name,
+        prompt,
+        file,
+        no_tui,
+    }) = &cli.command
     {
         run_pipelines_command(
             &cli,
@@ -91,6 +89,7 @@ fn main() -> Result<()> {
                 name: name.as_str(),
                 prompt: prompt.as_deref(),
                 file: file.as_ref(),
+                no_tui: *no_tui,
             }),
         )?;
         return Ok(());
@@ -119,6 +118,7 @@ struct ExplicitRun<'a> {
     name: &'a str,
     prompt: Option<&'a str>,
     file: Option<&'a PathBuf>,
+    no_tui: bool,
 }
 
 fn run_skills_commands(cli: &Cli, skills_store: &SkillsStore, agents_path: &Path) -> Result<()> {
@@ -168,7 +168,10 @@ fn run_pipelines_command(
                 }
             };
             let skills_store = SkillsStore::new(skills_dir);
-            let options = PipelineRunOptions { debug: cli.debug };
+            let options = PipelineRunOptions {
+                debug: cli.debug,
+                no_tui: cli.pipeline.no_tui || run.no_tui,
+            };
             crate::pipeline_run::run(
                 run.name,
                 &user_text,
@@ -205,7 +208,10 @@ fn run_pipelines_command(
                     }
                 };
                 let skills_store = SkillsStore::new(skills_dir);
-                let options = PipelineRunOptions { debug: cli.debug };
+                let options = PipelineRunOptions {
+                    debug: cli.debug,
+                    no_tui: cli.pipeline.no_tui,
+                };
                 crate::pipeline_run::run(
                     pname,
                     &user_text,
@@ -247,7 +253,10 @@ fn run_pipelines_default(cli: &Cli, overrides: &HashMap<String, String>) -> Resu
     let pipeline_name = pipeline_pick::pick_pipeline_interactive(&entries)?;
     let dot = crate::dot_prime_agent_config::load_merged(&local_cfg)?;
     let user_text = resolve_user_text_for_default_pipeline(cli)?;
-    let options = PipelineRunOptions { debug: cli.debug };
+    let options = PipelineRunOptions {
+        debug: cli.debug,
+        no_tui: cli.pipeline.no_tui,
+    };
     crate::pipeline_run::run(
         &pipeline_name,
         &user_text,

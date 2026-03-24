@@ -1,3 +1,5 @@
-I want the pipeline title to be automatically saved like the rest.  If its empty, simply dont save, but allow the ui to go to empty and them attempt to rename it to somehting different.
+the pipeline title container that has the input box + button should not have a box around it and there should be no "rename" button.
+
+
 
 

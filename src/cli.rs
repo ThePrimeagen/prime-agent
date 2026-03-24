@@ -45,7 +45,7 @@ pub struct PipelineRootArgs {
     /// with `--prompt`)
     #[arg(long)]
     pub file: Option<PathBuf>,
-    /// Ignored (pipelines always use plain stdout; kept for compatibility)
+    /// Disable ratatui pipeline progress (plain stdout only). Same as `PRIME_AGENT_NO_TUI=1`.
     #[arg(long)]
     pub no_tui: bool,
 }
@@ -82,7 +82,7 @@ pub enum RootCommand {
         /// Read user prompt from a UTF-8 file (mutually exclusive with --prompt)
         #[arg(long)]
         file: Option<PathBuf>,
-        /// Ignored (kept for compatibility; use `PRIME_AGENT_NO_TUI=1` similarly)
+        /// Disable ratatui pipeline progress (plain stdout only).
         #[arg(long)]
         no_tui: bool,
     },

@@ -802,7 +802,7 @@ test("pipeline rename via WS updates URL, nav, and on-disk folder", async ({
   expect(fs.existsSync(oldPath)).toBe(false);
 });
 
-test("pipeline rename save button with empty name does not navigate or error", async ({
+test("pipeline rename submit with empty name does not navigate or error", async ({
   page,
 }) => {
   const suffix = uniqueSuffix();
@@ -812,7 +812,7 @@ test("pipeline rename save button with empty name does not navigate or error", a
 
   const titleInput = page.locator("#pipeline-title");
   await titleInput.fill("");
-  await page.getByTestId("pipeline-rename-save").click();
+  await titleInput.press("Enter");
   await expect(page).toHaveURL(new RegExp(`/pipelines/${oldName}$`));
   await expect(titleInput).toHaveValue("");
 });

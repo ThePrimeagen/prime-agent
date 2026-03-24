@@ -75,7 +75,6 @@ fn run_idle_commit_cursor(data_dir: &Path) -> Result<()> {
         idle_commit_prompt(),
         None,
         None,
-        None,
         yolo,
         None,
     );

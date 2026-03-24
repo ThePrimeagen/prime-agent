@@ -435,29 +435,6 @@ fn normalize_pipeline_header_line(line: &str) -> String {
     line.to_string()
 }
 
-fn normalize_running_stdout_counts(line: &str) -> String {
-    if !line.contains("* running ") {
-        return line.to_string();
-    }
-    let Some(pos_open) = line.rfind(" (") else {
-        return line.to_string();
-    };
-    let after_open = &line[pos_open + 2..];
-    let Some(without_close) = after_open.strip_suffix(')') else {
-        return line.to_string();
-    };
-    let mut parts = without_close.splitn(2, ',');
-    let (Some(a), Some(b)) = (parts.next(), parts.next()) else {
-        return line.to_string();
-    };
-    let a = a.trim();
-    let b = b.trim();
-    if !(a.chars().all(|c| c.is_ascii_digit()) && b.chars().all(|c| c.is_ascii_digit())) {
-        return line.to_string();
-    }
-    format!("{} (<counts>)", &line[..pos_open])
-}
-
 fn normalize_spinner_and_secs_line(line: &str) -> String {
     let mut s = line.to_string();
     for sp in SPINNER_CHARS {
@@ -491,8 +468,7 @@ fn normalize_pipeline_run_stdout(raw: &str) -> String {
         } else if line.starts_with("pipeline ") {
             normalize_pipeline_header_line(line)
         } else {
-            let line = normalize_running_stdout_counts(line);
-            normalize_spinner_and_secs_line(&line)
+            normalize_spinner_and_secs_line(line)
         };
         out.push_str(&line);
     }
@@ -504,9 +480,8 @@ const PIPELINE_RUN_STDOUT_GOLDEN: &str = r#"prime-agent(<version>)
 <effective-config>
 pipeline demo-pipe <run_name>
 step 1 stepone
-  * running (no skill) (<counts>)
+  * running (no skill)
 Step 0 / 1 Pipeline 0 / 1 <spinner> <secs>s
-step 1 skill (no skill) succeeded, 1 / 1 completed
 Step 1 / 1 Pipeline 1 / 1 <spinner> <secs>s
 "#;
 
@@ -537,4 +512,40 @@ fn pipelines_run_stdout_matches_golden_after_normalization() {
     let out = cmd.assert().success().get_output().stdout.clone();
     let got = normalize_pipeline_run_stdout(&String::from_utf8_lossy(&out));
     assert_eq!(got, PIPELINE_RUN_STDOUT_GOLDEN);
+}
+
+/// Two-step pipeline: while stage 1 runs, roadmap lists stage 2 as a following line (dim in TTY; plain in tests).
+#[test]
+fn pipelines_run_two_step_stdout_lists_pending_step_after_current_in_roadmap() {
+    let temp = TempDir::new().expect("temp");
+    let data_dir = temp.path().join("data");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&skills_dir).expect("skills");
+    write_dot_prime_agent_config_yolo(&temp, "m", "cursor-agent", true);
+    write_pipeline(
+        &data_dir,
+        "two-step",
+        r#"{"steps":[{"id":1,"title":"alpha","prompt":"p1","skills":[]},{"id":2,"title":"beta","prompt":"p2","skills":[]}]}"#,
+    );
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mock = bin.join("cursor-agent");
+    fs::write(
+        &mock,
+        "#!/bin/sh\ncat >/dev/null\necho '{\"text\":\"out1\"}'\n",
+    )
+    .expect("mock");
+    chmod_x(&mock);
+
+    let mut cmd = pipelines_cmd(&temp, &data_dir, &skills_dir, &bin);
+    cmd.args(["run", "two-step", "--prompt", "userhi"]);
+    let out = cmd.assert().success().get_output().stdout.clone();
+    let got = normalize_pipeline_run_stdout(&String::from_utf8_lossy(&out));
+
+    let pos_current = got.find("step 1 alpha").expect("roadmap should include step 1");
+    let pos_pending = got.find("step 2 beta").expect("roadmap should include pending step 2");
+    assert!(
+        pos_current < pos_pending,
+        "current step line should appear before pending step line: {got:?}"
+    );
 }

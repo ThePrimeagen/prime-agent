@@ -781,13 +781,13 @@
         if (selPipe) {
           const pl = selPipe;
           o +=
-            '          <article data-testid="pipeline-editor" style="max-width:740px;border:1px solid #ddd;padding:0.8rem;margin-top:0.8rem;position:relative;">\n            <form data-ws-form="rename_pipeline" data-old-name="' +
+            '          <div data-testid="pipeline-editor" style="max-width:740px;margin-top:0.8rem;">\n            <form data-ws-form="rename_pipeline" data-old-name="' +
             primeEscAttr(pl.name) +
             '" data-pipeline-location="/pipelines/' +
             pl.name_encoded +
             '">\n              <label>Title<br><input name="name" id="pipeline-title" value="' +
             primeEscAttr(pl.name) +
-            '" data-lowercase-field="pipeline-name" data-testid="pipeline-rename-name"></label><br><br>\n              <button type="submit" data-testid="pipeline-rename-save">Rename</button>\n            </form>\n          </article>\n          <button\n            type="button"\n            data-testid="pipeline-step-create-open"\n            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"\n            onclick="document.getElementById(\'pipeline-step-modal\').showModal();">Add Step</button>\n\n          <dialog id="pipeline-step-modal">\n            <form data-ws-form="create_step" data-pipeline="' +
+            '" data-lowercase-field="pipeline-name" data-testid="pipeline-rename-name"></label>\n            </form>\n          </div>\n          <button\n            type="button"\n            data-testid="pipeline-step-create-open"\n            style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;"\n            onclick="document.getElementById(\'pipeline-step-modal\').showModal();">Add Step</button>\n\n          <dialog id="pipeline-step-modal">\n            <form data-ws-form="create_step" data-pipeline="' +
             primeEscAttr(pl.name) +
             '">\n              <h3>Create Step</h3>\n              <label>Title<br><input name="title" data-lowercase-field="pipeline-step-title" required></label><br><br>\n              <label>Prompt<br><textarea name="prompt" rows="6" cols="40"></textarea></label><br><br>\n              <button type="submit">Save</button>\n              <button type="button" onclick="document.getElementById(\'pipeline-step-modal\').close();">Cancel</button>\n            </form>\n          </dialog>\n\n';
           if (steps.length > 0) {

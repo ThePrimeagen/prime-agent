@@ -12,7 +12,6 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Once;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -45,6 +44,8 @@ fn install_ctrlc_handler() {
 #[derive(Debug, Clone, Copy)]
 pub struct PipelineRunOptions {
     pub debug: bool,
+    /// When true, skip ratatui pipeline progress (plain stdout only).
+    pub no_tui: bool,
 }
 
 /// When `--debug` is set, each subprocess stdout/stderr line is echoed to stderr with this context.
@@ -164,7 +165,7 @@ pub fn run(
         skills_store,
         dot_config,
         cwd,
-        options.debug,
+        options,
     )
 }
 
@@ -175,8 +176,9 @@ fn run_plain(
     skills_store: &SkillsStore,
     dot_config: &DotPrimeAgentConfig,
     cwd: &Path,
-    debug: bool,
+    options: PipelineRunOptions,
 ) -> Result<()> {
+    let debug = options.debug;
     install_ctrlc_handler();
 
     if dot_config.clirunner != SUPPORTED_CLIRUNNER {
@@ -219,9 +221,13 @@ fn run_plain(
 
     let workspace = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
-    let is_tty = std::io::stdout().is_terminal();
+    let use_pipeline_tui = std::io::stdout().is_terminal()
+        && !options.no_tui
+        && std::env::var("PRIME_AGENT_NO_TUI").ok().as_deref() != Some("1");
     let (tx, rx) = mpsc::channel::<ProgressMsg>();
-    let display = thread::spawn(move || crate::pipeline_progress::run_display_loop(rx, is_tty));
+    let display = thread::spawn(move || {
+        crate::pipeline_progress::run_display_loop(rx, use_pipeline_tui);
+    });
 
     let tx_result = (|| -> Result<()> {
         tx.send(ProgressMsg::PipelineHeader {
@@ -231,6 +237,7 @@ fn run_plain(
         .map_err(|_| anyhow::anyhow!("pipeline progress channel closed"))?;
 
         let total_stages = steps.len();
+        let all_stage_titles: Vec<String> = steps.iter().map(|s| s.title.clone()).collect();
         for (stage_idx, step) in steps.iter().enumerate() {
             let stage_num = u32::try_from(stage_idx + 1).unwrap_or(u32::MAX);
             if stage_tasks_complete(&out_dir, stage_num, step, user_prompt)? {
@@ -251,7 +258,7 @@ fn run_plain(
                 dot_config,
                 debug,
             };
-            run_stage(&ctx, &tx, total_stages, stage_idx)?;
+            run_stage(&ctx, &tx, total_stages, stage_idx, &all_stage_titles)?;
         }
         Ok(())
     })();
@@ -348,6 +355,7 @@ fn run_stage(
     tx: &mpsc::Sender<ProgressMsg>,
     pipeline_stages_total: usize,
     stage_idx: usize,
+    all_stage_titles: &[String],
 ) -> Result<()> {
     let prior = read_prior_stage_json(ctx.out_dir, ctx.prev_stages)?;
     let specs = build_stage_task_builds(
@@ -369,16 +377,18 @@ fn run_stage(
         })
         .collect();
 
-    let line_counters: Vec<(Arc<AtomicUsize>, Arc<AtomicUsize>)> = (0..specs.len())
-        .map(|_| (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))))
+    let stdout_tails: Vec<Arc<Mutex<Vec<String>>>> = (0..specs.len())
+        .map(|_| Arc::new(Mutex::new(Vec::new())))
         .collect();
+    let tail_max = usize::try_from(ctx.dot_config.stdout_lines).unwrap_or(3).max(1);
 
     let stage_display = usize::try_from(ctx.stage_num).unwrap_or(usize::MAX);
     tx.send(ProgressMsg::StageStart {
         stage_display,
         title: ctx.step.title.clone(),
+        all_stage_titles: all_stage_titles.to_vec(),
         skills: display_names.clone(),
-        line_counters: line_counters.clone(),
+        stdout_tails: stdout_tails.clone(),
         pipeline_stages_total,
         pipeline_stages_completed_before: stage_idx,
     })
@@ -399,8 +409,7 @@ fn run_stage(
             let skill_name = display_names[ti].clone();
             let sd = stage_display;
             let ti_idx = ti;
-            let o_lines = line_counters[ti].0.clone();
-            let e_lines = line_counters[ti].1.clone();
+            let tail_buf = stdout_tails[ti].clone();
             let debug_stream = if dbg {
                 Some(DebugStreamCtx {
                     step_title: ctx.step.title.clone(),
@@ -418,8 +427,7 @@ fn run_stage(
                     &workspace,
                     &prompt,
                     None,
-                    Some(o_lines),
-                    Some(e_lines),
+                    Some((tail_buf, tail_max)),
                     yolo,
                     debug_stream,
                 );
@@ -669,16 +677,16 @@ pub(crate) fn read_prior_stage_json(out_dir: &Path, last_inclusive: u32) -> Resu
 }
 
 /// Stream each stdout line to `line_tx` (if Some) while collecting full stdout/stderr.
+/// When `stdout_tail` is Some, each stdout line is appended to the buffer, keeping at most the last N lines.
 #[allow(clippy::too_many_lines)] // subprocess setup + thread join
-#[allow(clippy::too_many_arguments)] // optional line stream + atomic line counters
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_cursor_agent_streaming(
     binary: &str,
     model: &str,
     workspace: &Path,
     prompt: &str,
     line_tx: Option<mpsc::Sender<String>>,
-    stdout_line_count: Option<Arc<AtomicUsize>>,
-    stderr_line_count: Option<Arc<AtomicUsize>>,
+    stdout_tail: Option<(Arc<Mutex<Vec<String>>>, usize)>,
     yolo: bool,
     debug_stream: Option<DebugStreamCtx>,
 ) -> (String, String, i32, Result<String, String>) {
@@ -776,8 +784,14 @@ pub(crate) fn run_cursor_agent_streaming(
             }
             acc.push_str(&line);
             acc.push('\n');
-            if let Some(ref c) = stdout_line_count {
-                c.fetch_add(1, Ordering::Relaxed);
+            if let Some((buf, max_lines)) = stdout_tail.as_ref() {
+                let max_lines = (*max_lines).max(1);
+                if let Ok(mut g) = buf.lock() {
+                    g.push(line.clone());
+                    while g.len() > max_lines {
+                        g.remove(0);
+                    }
+                }
             }
             if let Some(ref tx) = line_tx {
                 let _ = tx.send(line);
@@ -794,9 +808,6 @@ pub(crate) fn run_cursor_agent_streaming(
             for line in acc.lines() {
                 debug_stream_line(ctx, "stderr", line);
             }
-        }
-        if let Some(ref c) = stderr_line_count {
-            c.fetch_add(acc.lines().count(), Ordering::Relaxed);
         }
         acc
     });

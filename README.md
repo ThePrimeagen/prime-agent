@@ -31,7 +31,7 @@ instructions stored as Markdown files.
 | `clirunner` | CLI to invoke; must be `cursor-agent` (legacy key `cli` is accepted as an alias). |
 | `stdout_lines` | Reserved for future CLI display options (parsed; default `3`; must be at least `1`). |
 
-`--no-tui` and `PRIME_AGENT_NO_TUI=1` are accepted for compatibility and have no effect (pipelines run uses plain stdout progress only).
+`--no-tui` and `PRIME_AGENT_NO_TUI=1` disable the full-screen ratatui pipeline progress view; output falls back to plain stdout (for scripts and CI).
 
 ## Skills Directory
 
