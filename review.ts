@@ -1,3 +1,5 @@
+#!/usr/bin/env bun
+
 import { create } from "./agents.ts";
 import { wait } from "./wait.ts";
 import fs from "fs";
