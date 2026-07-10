@@ -13,13 +13,22 @@ export type CursorCloudAgent = {
   repos?: string[];
 };
 
-export function create(): Promise<CursorAgent>;
+export type CreateOptions = {
+  prUrl?: string;
+  name?: string;
+  repoUrl?: string;
+  startingRef?: string;
+};
+
+export function create(opts?: CreateOptions): Promise<CursorAgent>;
 export function get(): Promise<CursorCloudAgent[]>;
+export function getPr(agentId: string): Promise<string>;
 export type PromptOptions = {
   model?: string;
 };
 
 export interface CursorAgent {
+  agentId: string;
   // carries on a conversation with the same agent in the same chat
-  prompt(p: string, opts: PromptOptions): Promise<string>;
+  prompt(p: string, opts?: PromptOptions): Promise<string>;
 }

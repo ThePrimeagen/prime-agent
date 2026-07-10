@@ -5,7 +5,7 @@ function sleep(ms: number): Promise<"tick"> {
   return new Promise((resolve) => setTimeout(() => resolve("tick"), ms));
 }
 
-export async function wait(promise: Promise<string>): Promise<string> {
+export async function wait<T>(promise: Promise<T>): Promise<T> {
   let i = 0;
   // Attach early so a rejection isn't an unhandled rejection while we race ticks.
   const settled = promise.then(

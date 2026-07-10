@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+ln -s `pwd`/review.ts ~/.local/bin/prime-agent-review
+ln -s `pwd`/take-over.ts ~/.local/bin/prime-agent-take-over
+ln -s `pwd`/kick-off.ts ~/.local/bin/prime-agent-kick-off
+
