@@ -14,11 +14,11 @@ import { formatAgentTitle } from "./sessions.ts";
 import { wait } from "./wait.ts";
 
 const PHASES_DIR = path.join(import.meta.dir, "phases");
-const REVIEW_PHASES = new Set([2, 3, 4, 7]);
-const VALID_PHASES = new Set([1, 2, 3, 4, 5, 7]);
+const REVIEW_PHASES = new Set([2, 3, 4, 6, 7]);
+const VALID_PHASES = new Set([1, 2, 3, 4, 5, 6, 7]);
 
 export type ResumeMode = "phase" | "review";
-export type PhaseNumber = 1 | 2 | 3 | 4 | 5 | 7;
+export type PhaseNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export type PipelineStep =
   | { kind: "phase"; phase: PhaseNumber }
@@ -63,7 +63,7 @@ export function pipelineStepsFrom(
   phase: PhaseNumber,
   mode: ResumeMode,
 ): PipelineStep[] {
-  const order: PhaseNumber[] = [1, 2, 3, 4, 5, 7];
+  const order: PhaseNumber[] = [1, 2, 3, 4, 5, 6, 7];
   const startIdx = order.indexOf(phase);
   const steps: PipelineStep[] = [];
 
@@ -154,25 +154,30 @@ function phaseTask(phase: PhaseNumber, startingPrompt?: string): string {
       ? `start 7 phase planning\n\n${startingPrompt}`
       : "start 7 phase planning";
   }
-  if (phase === 7) return "skip phase 6, start phase 7";
+  if (phase === 7) return "start phase 7";
   return `start phase ${phase}`;
 }
 
 async function reviewAndFix(
-  steve: Steve,
+  fixAgent: Steve,
   phase: number,
   phaseFile: ContextFile,
   reviewContextFiles: ContextFile[],
   repoUrl: string,
+  prUrlHint?: string,
 ) {
   if (!REVIEW_PHASES.has(phase)) return;
 
   let prUrl: string;
-  try {
-    prUrl = await wait(getPr(steve.agentId));
-  } catch {
-    console.log(`phase ${phase}: no github pr, skipping review`);
-    return;
+  if (prUrlHint) {
+    prUrl = prUrlHint;
+  } else {
+    try {
+      prUrl = await wait(getPr(fixAgent.agentId));
+    } catch {
+      console.log(`phase ${phase}: no github pr, skipping review`);
+      return;
+    }
   }
 
   console.log(`phase ${phase}: reviewing ${prUrl}`);
@@ -192,9 +197,9 @@ async function reviewAndFix(
     ),
   );
 
-  console.log(`phase ${phase}: asking Steve to fix PR feedback`);
+  console.log(`phase ${phase}: asking agent to fix PR feedback`);
   await wait(
-    steve.prompt(`<YourTask>
+    fixAgent.prompt(`<YourTask>
 Fix the PR feedback from the phase ${phase} review.
 
 <ReviewFeedback>
@@ -213,15 +218,41 @@ async function runPipeline(
   repoUrl: string,
   startingPrompt?: string,
 ) {
+  let phase6Agent: Steve | undefined;
+  let phase6PrUrl: string | undefined;
+
   for (const step of steps) {
     if (step.kind === "phase") {
       const phaseFile = loadPhase(step.phase);
+
+      if (step.phase === 6) {
+        try {
+          phase6PrUrl = await wait(getPr(steve.agentId));
+        } catch {
+          console.log("phase 6: no github pr, skipping");
+          continue;
+        }
+
+        phase6Agent = await create({
+          name: "phase 6: invariance",
+          prUrl: phase6PrUrl,
+          repoUrl,
+        });
+        console.log(`phase 6: start (new agent) ${phase6Agent.agentId}`);
+        await wait(
+          phase6Agent.prompt(
+            taskPrompt(phaseTask(6), [phaseFile, ...phaseContextFiles]),
+          ),
+        );
+        continue;
+      }
+
       if (step.phase === 1) {
         console.log("phase 1: start 7 phase planning");
       } else if (step.phase === 5) {
         console.log("phase 5: start (no review)");
       } else if (step.phase === 7) {
-        console.log("skip phase 6, start phase 7");
+        console.log("phase 7: start");
       } else {
         console.log(`phase ${step.phase}: start`);
       }
@@ -250,6 +281,19 @@ async function runPipeline(
     }
 
     const phaseFile = loadPhase(step.phase);
+    if (step.phase === 6) {
+      const fixAgent = phase6Agent ?? steve;
+      await reviewAndFix(
+        fixAgent,
+        6,
+        phaseFile,
+        reviewContextFiles,
+        repoUrl,
+        phase6PrUrl,
+      );
+      continue;
+    }
+
     await reviewAndFix(
       steve,
       step.phase,
