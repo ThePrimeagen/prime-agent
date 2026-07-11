@@ -1,13 +1,22 @@
 import "dotenv/config";
 import { Agent } from "@cursor/sdk";
 import { extractPrUrl } from "./pr.ts";
+import { waitWithReconnect } from "./run-wait.ts";
 import { filterActiveAgents } from "./sessions.ts";
 
 function githubHttpsUrl(remote: string): string {
-  if (remote.startsWith("git@github.com:")) {
-    return `https://github.com/${remote.slice("git@github.com:".length).replace(/\.git$/, "")}`;
+  const trimmed = remote.trim().replace(/\.git$/, "");
+  if (trimmed.startsWith("git@github.com:")) {
+    return `https://github.com/${trimmed.slice("git@github.com:".length)}`;
   }
-  return remote.replace(/\.git$/, "");
+  if (trimmed.startsWith("https://github.com/") || trimmed.startsWith("http://github.com/")) {
+    return trimmed.replace(/^http:\/\//, "https://");
+  }
+  // .prime-agent project is often "owner/repo" — cloud send requires a full github URL
+  if (/^[^/\s]+\/[^/\s]+$/.test(trimmed)) {
+    return `https://github.com/${trimmed}`;
+  }
+  return trimmed;
 }
 
 export type CreateOptions = {
@@ -49,6 +58,19 @@ export async function create(opts: CreateOptions = {}) {
     },
   });
 
+  return wrapSdkAgent(sdkAgent);
+}
+
+export async function resume(agentId: string) {
+  const sdkAgent = await Agent.resume(agentId, {
+    apiKey: process.env.CURSOR_API_KEY,
+  });
+  return wrapSdkAgent(sdkAgent);
+}
+
+type SdkAgent = Awaited<ReturnType<typeof Agent.create>>;
+
+function wrapSdkAgent(sdkAgent: SdkAgent) {
   return {
     agentId: sdkAgent.agentId,
     async prompt(p: string, promptOpts: { model?: string } = {}): Promise<string> {
@@ -56,7 +78,13 @@ export async function create(opts: CreateOptions = {}) {
         p,
         promptOpts.model ? { model: { id: promptOpts.model } } : undefined,
       );
-      const result = await run.wait();
+      const result = await waitWithReconnect(run, (runId) =>
+        Agent.getRun(runId, {
+          runtime: "cloud",
+          agentId: sdkAgent.agentId,
+          apiKey: process.env.CURSOR_API_KEY,
+        }),
+      );
 
       if (result.status === "error") {
         throw new Error(result.error?.message ?? "agent run failed");

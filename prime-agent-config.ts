@@ -6,11 +6,6 @@ export type PrimeAgentConfig = {
   context: string[];
 };
 
-export type LoadPrimeAgentConfigOptions = {
-  cwd?: string;
-  readFile?: (path: string) => string;
-};
-
 export function parsePrimeAgentConfig(raw: string): PrimeAgentConfig {
   let parsed: unknown;
   try {
@@ -43,17 +38,12 @@ export function parsePrimeAgentConfig(raw: string): PrimeAgentConfig {
   };
 }
 
-export function loadPrimeAgentConfig(
-  opts: LoadPrimeAgentConfigOptions = {},
-): PrimeAgentConfig {
-  const cwd = opts.cwd ?? process.cwd();
-  const readFile =
-    opts.readFile ?? ((filePath: string) => fs.readFileSync(filePath, "utf8"));
-  const configPath = path.join(cwd, ".prime-agent");
+export function loadPrimeAgentConfig(): PrimeAgentConfig {
+  const configPath = path.join(process.cwd(), ".prime-agent");
 
   let raw: string;
   try {
-    raw = readFile(configPath);
+    raw = fs.readFileSync(configPath, "utf8");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`missing .prime-agent: ${message}`);

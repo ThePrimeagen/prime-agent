@@ -3,11 +3,6 @@ export type QuestionItem<T> = {
   data: T;
 };
 
-export type QuestionOptions = {
-  stdin?: NodeJS.ReadableStream;
-  stdout?: NodeJS.WritableStream;
-};
-
 type RawStdin = NodeJS.ReadableStream & {
   setRawMode?: (mode: boolean) => void;
   isTTY?: boolean;
@@ -22,35 +17,28 @@ function render(items: QuestionItem<unknown>[], selected: number): string {
     .join("\n");
 }
 
-function clearLines(stdout: NodeJS.WritableStream, count: number) {
+function clearLines(count: number) {
   if (count <= 0) return;
-  // Move to start of current line, then clear this line and lines above.
-  stdout.write("\r");
+  process.stdout.write("\r");
   for (let i = 0; i < count; i++) {
-    stdout.write("\x1b[2K");
-    if (i < count - 1) stdout.write("\x1b[1A");
+    process.stdout.write("\x1b[2K");
+    if (i < count - 1) process.stdout.write("\x1b[1A");
   }
-  stdout.write("\r");
+  process.stdout.write("\r");
 }
 
-export async function question<T>(
-  items: QuestionItem<T>[],
-  opts: QuestionOptions = {},
-): Promise<T> {
+export async function question<T>(items: QuestionItem<T>[]): Promise<T> {
   if (items.length === 0) {
     throw new Error("question requires at least one item");
   }
 
-  const stdin = (opts.stdin ?? process.stdin) as RawStdin;
-  const stdout = opts.stdout ?? process.stdout;
-
+  const stdin = process.stdin as RawStdin;
   let selected = 0;
   let lineCount = 0;
 
   const draw = () => {
-    clearLines(stdout, lineCount);
-    const frame = render(items, selected);
-    stdout.write(frame);
+    clearLines(lineCount);
+    process.stdout.write(render(items, selected));
     lineCount = items.length;
   };
 
@@ -70,7 +58,7 @@ export async function question<T>(
       stdin.off("data", onData);
       stdin.off("error", onError);
       if (canRaw) stdin.setRawMode!(wasRaw);
-      clearLines(stdout, lineCount);
+      clearLines(lineCount);
       lineCount = 0;
     };
 
@@ -91,7 +79,7 @@ export async function question<T>(
 
       while (buffer.length > 0) {
         if (buffer.startsWith("\x1b[A") || buffer.startsWith("\x1bOA")) {
-          buffer = buffer.slice(buffer.startsWith("\x1b[A") ? 3 : 3);
+          buffer = buffer.slice(3);
           selected = Math.max(0, selected - 1);
           draw();
           continue;
@@ -111,9 +99,7 @@ export async function question<T>(
           fail(new Error("question cancelled"));
           return;
         }
-        // Incomplete escape sequence — wait for more bytes.
         if (buffer.startsWith("\x1b") && buffer.length < 3) return;
-        // Unknown key — drop one char and keep going.
         buffer = buffer.slice(1);
       }
     };

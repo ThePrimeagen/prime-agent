@@ -5,50 +5,19 @@ export type ContextFile = {
   content: string;
 };
 
-export type GrabContextOptions = {
-  stdin?: NodeJS.ReadableStream;
-  stdout?: NodeJS.WritableStream;
-  readFile?: (path: string) => string;
-};
-
 export type GrabbedContext = {
   extraPrompt: string;
   files: ContextFile[];
 };
 
-export type LoadContextFilesOptions = {
-  readFile?: (path: string) => string;
-};
-
-export type CraftReviewPromptInput = {
-  prUrl: string;
-  files: ContextFile[];
-  extraPrompt?: string;
-};
-
-export type CraftTakeOverPromptInput = {
-  branch: string;
-  files: ContextFile[];
-  details?: string;
-};
-
-export type CraftKickOffPromptInput = {
-  prompt: string;
-  files: ContextFile[];
-};
-
-async function readLine(
-  stdin: NodeJS.ReadableStream,
-  stdout: NodeJS.WritableStream,
-  label: string,
-): Promise<string> {
-  stdout.write(label);
+async function readLine(label: string): Promise<string> {
+  process.stdout.write(label);
   return await new Promise<string>((resolve, reject) => {
     let buffer = "";
 
     const cleanup = () => {
-      stdin.off("data", onData);
-      stdin.off("error", onError);
+      process.stdin.off("data", onData);
+      process.stdin.off("error", onError);
     };
 
     const onError = (err: unknown) => {
@@ -65,68 +34,43 @@ async function readLine(
       resolve(line);
     };
 
-    stdin.on("data", onData);
-    stdin.on("error", onError);
+    process.stdin.on("data", onData);
+    process.stdin.on("error", onError);
   });
 }
 
-export async function grabContext(
-  opts: GrabContextOptions = {},
-): Promise<GrabbedContext> {
-  const stdin = opts.stdin ?? process.stdin;
-  const stdout = opts.stdout ?? process.stdout;
-  const readFile =
-    opts.readFile ?? ((path: string) => fs.readFileSync(path, "utf8"));
-
-  const extraPrompt = await readLine(
-    stdin,
-    stdout,
-    "prompt to add (blank for none): ",
-  );
-
-  const files = await grabContextFiles({ stdin, stdout, readFile });
-
+export async function grabContext(): Promise<GrabbedContext> {
+  const extraPrompt = await readLine("prompt to add (blank for none): ");
+  const files = await grabContextFiles();
   return { extraPrompt, files };
 }
 
-export async function grabContextFiles(
-  opts: GrabContextOptions = {},
-): Promise<ContextFile[]> {
-  const stdin = opts.stdin ?? process.stdin;
-  const stdout = opts.stdout ?? process.stdout;
-  const readFile =
-    opts.readFile ?? ((path: string) => fs.readFileSync(path, "utf8"));
-
+export async function grabContextFiles(): Promise<ContextFile[]> {
   const files: ContextFile[] = [];
   while (true) {
-    const path = await readLine(
-      stdin,
-      stdout,
-      "file to add (blank to finish): ",
-    );
+    const path = await readLine("file to add (blank to finish): ");
     if (path.trim() === "") break;
     const trimmed = path.trim();
-    const content = readFile(trimmed);
-    files.push({ path: trimmed, content });
+    files.push({
+      path: trimmed,
+      content: fs.readFileSync(trimmed, "utf8"),
+    });
   }
-
   return files;
 }
 
-export function loadContextFiles(
-  paths: string[],
-  opts: LoadContextFilesOptions = {},
-): ContextFile[] {
-  const readFile =
-    opts.readFile ?? ((path: string) => fs.readFileSync(path, "utf8"));
-
+export function loadContextFiles(paths: string[]): ContextFile[] {
   return paths.map((filePath) => ({
     path: filePath,
-    content: readFile(filePath),
+    content: fs.readFileSync(filePath, "utf8"),
   }));
 }
 
-export function craftReviewPrompt(input: CraftReviewPromptInput): string {
+export function craftReviewPrompt(input: {
+  prUrl: string;
+  files: ContextFile[];
+  extraPrompt?: string;
+}): string {
   if (!input.prUrl.trim()) {
     throw new Error("craftReviewPrompt requires a prUrl");
   }
@@ -150,7 +94,11 @@ You are to do an adversarial review of ${input.prUrl}.  You need to thoroughly c
 `;
 }
 
-export function craftTakeOverPrompt(input: CraftTakeOverPromptInput): string {
+export function craftTakeOverPrompt(input: {
+  branch: string;
+  files: ContextFile[];
+  details?: string;
+}): string {
   if (!input.branch.trim()) {
     throw new Error("craftTakeOverPrompt requires a branch");
   }
@@ -178,7 +126,10 @@ ${details}
 `;
 }
 
-export function craftKickOffPrompt(input: CraftKickOffPromptInput): string {
+export function craftKickOffPrompt(input: {
+  prompt: string;
+  files: ContextFile[];
+}): string {
   if (!input.prompt.trim()) {
     throw new Error("craftKickOffPrompt requires a prompt");
   }

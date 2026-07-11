@@ -21,6 +21,7 @@ export type CreateOptions = {
 };
 
 export function create(opts?: CreateOptions): Promise<CursorAgent>;
+export function resume(agentId: string): Promise<CursorAgent>;
 export function get(): Promise<CursorCloudAgent[]>;
 export function getPr(agentId: string): Promise<string>;
 export type PromptOptions = {
